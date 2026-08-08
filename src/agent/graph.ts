@@ -8,6 +8,9 @@
  * No prompt can talk its way past that edge, because no prompt is consulted.
  */
 
+// Must precede any LangChain import that could run a graph — see the module.
+import "./async-context";
+
 import {
   END,
   MemorySaver,

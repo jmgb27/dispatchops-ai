@@ -140,14 +140,52 @@ export function streamDispatchRun(opts: {
    * happen after the graph is done, not when the Response is returned.
    */
   onFinished?: () => Promise<void>;
+  /**
+   * Extends the current request's lifetime. Required on Cloudflare — see the
+   * note on eager production below.
+   */
+  waitUntil?: (promise: Promise<unknown>) => void;
 }): Response {
   const encoder = new TextEncoder();
   const graph = opts.graph ?? dispatchGraph;
 
-  const body = new ReadableStream<Uint8Array>({
-    async start(controller) {
+  /**
+   * The graph is driven by an eagerly-started producer writing into a
+   * TransformStream, rather than from inside `ReadableStream.start()`.
+   *
+   * That is not a style choice. `start()` is invoked lazily, when the body is
+   * first read — which on Cloudflare is after the Durable Object's `fetch()`
+   * has already returned, in a different I/O context. LangGraph tracks the
+   * running graph in an AsyncLocalStorage, so the continuation loses it and
+   * `interrupt()` throws "Called interrupt() outside the context of a graph",
+   * taking the entire human-in-the-loop path down. Starting the producer here
+   * keeps it in the request's async context, and `waitUntil` keeps that context
+   * alive until the run finishes.
+   *
+   * Local `wrangler dev` does not enforce the context boundary, so this only
+   * ever reproduces in production.
+   */
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+
+  const producer = (async () => {
+    {
       const send = (event: DispatchEvent) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        void writer.write(
+          encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
+        );
+      };
+
+      /** Flushes state to durable storage exactly once, whatever the outcome. */
+      let finished = false;
+      const finish = async () => {
+        if (finished) return;
+        finished = true;
+        try {
+          await opts.onFinished?.();
+        } catch {
+          // Persistence failure must not truncate a response already streamed.
+        }
       };
 
       try {
@@ -205,26 +243,31 @@ export function streamDispatchRun(opts: {
           },
         );
 
+        // Persist BEFORE announcing the run is over. The console enables the
+        // Approve button on `done`, and a dispatcher who clicks it immediately
+        // must not race the checkpoint that records the interrupt — losing that
+        // race resumes a thread the checkpointer has not seen yet, which ends
+        // the run silently with nothing executed.
+        await finish();
+
         send({ type: "tms_snapshot", loads: listLoads(), audit: getAuditLog() });
         send({
           type: "done",
           status: interrupted ? "PENDING_HUMAN_APPROVAL" : finalStatus,
         });
       } catch (err) {
+        await finish();
         send({ type: "error", message: (err as Error).message });
       } finally {
-        try {
-          await opts.onFinished?.();
-        } catch {
-          // Persistence failure must not truncate a response already streamed.
-        }
         await flushTraces();
-        controller.close();
+        await writer.close();
       }
-    },
-  });
+    }
+  })();
 
-  return new Response(body, {
+  opts.waitUntil?.(producer);
+
+  return new Response(readable, {
     headers: {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",

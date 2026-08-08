@@ -31,10 +31,12 @@
     }
   ],
 
+  // QWEN_API_KEY and QWEN_BASE_URL are set with `wrangler secret put`, not here.
+  // A dedicated Model Studio workspace host identifies the workspace, so it does
+  // not belong in a committed file.
   "vars": {
     "MAX_AUTONOMOUS_SPEND_USD": "500",
     "MOCK_AGENT": "0",
-    "QWEN_BASE_URL": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "QWEN_MODEL": "qwen3.7-plus"
   }
 }

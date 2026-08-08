@@ -13,6 +13,8 @@ where the spend limit is a graph edge, not a line in the prompt.**
 [![Langfuse](https://img.shields.io/badge/Langfuse-v5_OTel-181818?style=flat-square)](https://langfuse.com)
 [![Tests](https://img.shields.io/badge/tests-13_passing-1D6B4E?style=flat-square)](#tests)
 
+### [▶ Live demo](https://dispatchops-ai.john-6ec.workers.dev)
+
 [Why it exists](#the-problem) · [How it works](#how-it-works) · [The guardrail](#the-guardrail) · [Unit economics](#unit-economics) · [Run it](#quick-start) · [Deploy](#deployment) · [Limitations](#known-limitations)
 
 </div>
@@ -302,6 +304,14 @@ Workers offers **no isolate affinity**. The request that calls `interrupt()` and
 - **Durability rides on LangGraph's own checkpointer.** `MemorySaver` exposes `storage` and `writes` as plain records of `Uint8Array`, which Durable Object storage serialises natively. A thin write-through subclass persists them and `blockConcurrencyWhile` rehydrates on cold start, so interrupt/resume semantics stay exactly the ones the framework ships rather than a hand-rolled reimplementation.
 
 Verified on `workerd`: a run interrupted at $1,324.50, the runtime killed outright, and the same thread resumed in a **fresh process** — committing as `HUMAN_DISPATCHER` from state rehydrated off disk.
+
+#### Two things that only break in production
+
+Both of these pass under `wrangler dev` and fail on deployed Workers, which makes them worth writing down.
+
+**LangChain needs an AsyncLocalStorage installed by hand.** `interrupt()` locates the running graph through `AsyncLocalStorageProviderSingleton`. On Node that is initialised as a side effect of loading `@langchain/core/context`; bundled for `workerd` that module is never reached, so the provider silently stays a `MockAsyncLocalStorage` whose `getStore()` returns undefined. Every other path — tool loop, cost gate, autonomous execution — works fine without it, so the failure presents as *only approvals are broken, and only in production*. [`src/agent/async-context.ts`](src/agent/async-context.ts) installs a real one; the call is a no-op under Node.
+
+**State must be durable before the run reports `done`.** The console enables Approve when it sees the `done` event, so a dispatcher who clicks immediately can outrun the checkpoint that records the interrupt — resuming a thread the checkpointer has not seen yet, which ends the run with nothing executed and no error. Persistence therefore happens *before* the terminal event is sent, not in a `finally` after it.
 
 A single instance is deliberate. The checkpointer is per-thread but the TMS and audit log are shared demo state, so keying the object by `thread_id` would fragment the board across scenarios. Serialising every run through one object costs nothing at demo volume and buys strong consistency. KV would not do: it is eventually consistent, and a financial approval should not race.
 

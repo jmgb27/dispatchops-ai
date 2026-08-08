@@ -159,6 +159,7 @@ export class DispatchRoom extends DurableObject {
       emitRunStarted: true,
       graph: this.graph,
       onFinished: () => this.persist(),
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
   }
 
@@ -186,6 +187,7 @@ export class DispatchRoom extends DurableObject {
       emitRunStarted: false,
       graph: this.graph,
       onFinished: () => this.persist(),
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
   }
 }

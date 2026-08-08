@@ -8,7 +8,7 @@ import type { AIMessage, ToolMessage } from "@langchain/core/messages";
 import type { Command } from "@langchain/langgraph";
 
 import { getAuditLog, listLoads } from "@/mock/loads";
-import { dispatchGraph } from "./graph";
+import { dispatchGraph, type DispatchGraph } from "./graph";
 import {
   flushTraces,
   runCallbacks,
@@ -129,8 +129,20 @@ export function streamDispatchRun(opts: {
   scenarioId: string;
   loadId: string;
   emitRunStarted: boolean;
+  /**
+   * Graph to run. Defaults to the in-process one; the Cloudflare Durable Object
+   * passes a graph compiled against its own persistent checkpointer.
+   */
+  graph?: DispatchGraph;
+  /**
+   * Called once the run has finished streaming, successfully or not. The
+   * Durable Object uses this to persist checkpoints and TMS state — it has to
+   * happen after the graph is done, not when the Response is returned.
+   */
+  onFinished?: () => Promise<void>;
 }): Response {
   const encoder = new TextEncoder();
+  const graph = opts.graph ?? dispatchGraph;
 
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -163,7 +175,7 @@ export function streamDispatchRun(opts: {
         await withTraceContext(
           { traceName, sessionId: opts.threadId, tags },
           async () => {
-            const stream = await dispatchGraph.stream(opts.input as never, {
+            const stream = await graph.stream(opts.input as never, {
               configurable: { thread_id: opts.threadId },
               callbacks: runCallbacks({
                 threadId: opts.threadId,
@@ -201,6 +213,11 @@ export function streamDispatchRun(opts: {
       } catch (err) {
         send({ type: "error", message: (err as Error).message });
       } finally {
+        try {
+          await opts.onFinished?.();
+        } catch {
+          // Persistence failure must not truncate a response already streamed.
+        }
         await flushTraces();
         controller.close();
       }

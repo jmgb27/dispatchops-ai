@@ -104,6 +104,26 @@ export function resetTms(): void {
   auditLog = [];
 }
 
+/**
+ * Whole-table snapshot, for hosts that cannot rely on this module's memory
+ * surviving between requests. On Cloudflare Workers the graph runs inside a
+ * Durable Object which persists this blob to storage; see
+ * `src/server/dispatch-room.ts`.
+ */
+export interface TmsSnapshot {
+  loads: Load[];
+  auditLog: AuditEntry[];
+}
+
+export function snapshotTms(): TmsSnapshot {
+  return { loads: structuredClone(loads), auditLog: structuredClone(auditLog) };
+}
+
+export function restoreTms(snapshot: TmsSnapshot): void {
+  loads = structuredClone(snapshot.loads);
+  auditLog = structuredClone(snapshot.auditLog);
+}
+
 /** Returns a defensive copy — callers cannot mutate the table by accident. */
 export function getLoad(loadId: string): Load | undefined {
   const load = loads.find((l) => l.loadId === loadId);

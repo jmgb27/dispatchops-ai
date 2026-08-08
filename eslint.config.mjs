@@ -12,6 +12,12 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Cloudflare build output and generated runtime types. Linting the
+    // generated types exhausts the heap — they are half a megabyte of ambient
+    // declarations, and none of it is ours.
+    ".open-next/**",
+    ".wrangler/**",
+    "worker-configuration.d.ts",
   ]),
 ]);
 

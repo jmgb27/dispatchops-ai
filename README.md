@@ -283,24 +283,30 @@ The app is a standard Next.js 16 application and runs anywhere a Node server doe
 
 ### Cloudflare Workers
 
-Next.js 16 ships a formal [Adapter API](https://nextjs.org/docs/app/api-reference/config/next-config-js/adapterPath), but Cloudflare's verified adapter is still in progress. Today the route is Cloudflare's own integration:
+Next.js 16 ships a formal [Adapter API](https://nextjs.org/docs/app/api-reference/config/next-config-js/adapterPath), but Cloudflare's verified adapter is still in progress, so the route is Cloudflare's own integration via `@opennextjs/cloudflare`. That part is already wired up here:
 
 ```bash
-npm i -D @opennextjs/cloudflare wrangler
-npx opennextjs-cloudflare build
-npx wrangler deploy
+npm run cf:preview   # build + run on workerd locally
+npm run cf:deploy    # build + wrangler deploy
 ```
 
-`wrangler.jsonc` needs `nodejs_compat` and a current compatibility date. Secrets go in with `wrangler secret put QWEN_API_KEY` rather than `.env.local`. Route handlers already declare `export const runtime = "nodejs"`, which is what the integration expects — the edge runtime is not a supported target.
+Secrets go in with `wrangler secret put QWEN_API_KEY` rather than `.env.local`. Route handlers declare `export const runtime = "nodejs"`, which is what the integration expects — the edge runtime is not a supported target.
 
-> [!IMPORTANT]
-> **Two pieces of state must become durable before the approval flow survives on Workers.**
->
-> The POC keeps its LangGraph checkpointer (`MemorySaver`) and its mock TMS table in module scope. That is correct for a single-node demo and load-bearing for the human-in-the-loop cycle: the request that calls `interrupt()` and the request that resumes it **must** find the same checkpoint. Workers offers no isolate affinity, so a dispatcher's `Approve` can land in an isolate that has never seen the interrupt — and the flagship demo fails in public.
->
-> The fix is a **Durable Object** keyed by `thread_id`, holding the checkpointer and the TMS table, with the route handlers as thin proxies to it. Cloudflare KV is not sufficient on its own: it is eventually consistent, and a financial approval should not race.
->
-> Related: [`instrumentation.ts`](instrumentation.ts) registers a `NodeTracerProvider` from `@opentelemetry/sdk-trace-node`, which is a Node-specific path. Verify it under `workerd` before enabling Langfuse on Workers — the app self-disables tracing when the keys are unset, so leaving them blank is a safe first deploy.
+#### Approval state is held in a Durable Object
+
+Workers offers **no isolate affinity**. The request that calls `interrupt()` and the request that resumes it are not guaranteed to share memory, so a module-scoped `MemorySaver` means a dispatcher's `Approve` can land in an isolate that has never seen the interrupt — the human-in-the-loop demo failing at random.
+
+[`src/server/dispatch-room.ts`](src/server/dispatch-room.ts) closes that. A single named Durable Object owns the checkpointer and the mock TMS, and both route handlers proxy to it, so every run and its eventual approval reach the same state. Two properties are worth calling out:
+
+- **The graph runs inside the object.** That makes the object's memory the TMS's memory, so the dispatcher board shows one consistent world rather than whatever the answering isolate happened to remember.
+- **Durability rides on LangGraph's own checkpointer.** `MemorySaver` exposes `storage` and `writes` as plain records of `Uint8Array`, which Durable Object storage serialises natively. A thin write-through subclass persists them and `blockConcurrencyWhile` rehydrates on cold start, so interrupt/resume semantics stay exactly the ones the framework ships rather than a hand-rolled reimplementation.
+
+Verified on `workerd`: a run interrupted at $1,324.50, the runtime killed outright, and the same thread resumed in a **fresh process** — committing as `HUMAN_DISPATCHER` from state rehydrated off disk.
+
+A single instance is deliberate. The checkpointer is per-thread but the TMS and audit log are shared demo state, so keying the object by `thread_id` would fragment the board across scenarios. Serialising every run through one object costs nothing at demo volume and buys strong consistency. KV would not do: it is eventually consistent, and a financial approval should not race.
+
+> [!NOTE]
+> [`instrumentation.ts`](instrumentation.ts) registers a `NodeTracerProvider` from `@opentelemetry/sdk-trace-node`, a Node-specific path that OpenNext's bundler also trips over on Next 16.3. Langfuse tracing is therefore **disabled on the Workers build** — the app self-disables cleanly when the keys are unset. Tracing is unaffected when running under Node (`npm run dev` / `npm start`).
 
 ---
 
@@ -321,6 +327,12 @@ src/agent/
 src/mock/                       Mock TMS: fleet roster, load table, demo scenarios
 src/app/api/dispatch/           POST run (SSE) + POST resume (Command resume)
 src/components/                 Dispatcher console, agent trace, approval card
+src/server/
+  dispatch-room.ts              Durable Object owning the checkpointer + TMS
+  dispatch-binding.ts           Resolves the DO on Workers, null everywhere else
+worker.js                       Wrangler entry — re-exports OpenNext + DispatchRoom
+wrangler.jsonc                  Worker config, DO binding, migrations
+scripts/cf-build.mjs            Cloudflare build wrapper (see Deployment)
 ```
 
 ---
@@ -351,7 +363,7 @@ This is a Phase 1 proof of concept and the boundary is worth stating plainly. Th
 - The TMS is two loads, six drivers and two carriers in memory. Phase 2 replaces it with an MCP server over the real PostgreSQL TMS.
 - Distances are great-circle × a 1.18 circuity factor, not a truck-routing engine. That is fine in the middle of the range and wrong at the feasibility boundary, where an underestimated deadhead can make an HOS-illegal assignment look legal.
 - Hours of Service is modelled as a single remaining-minutes figure. Real FMCSA limits are interacting clocks — 11 hours driving, a 14-hour window, the 30-minute break, and a 60/70-hour cycle. Production reads these from the ELD feed rather than modelling them.
-- `MemorySaver` is in-process. See [Deployment](#deployment).
+- `MemorySaver` is in-process under Node, which is fine for a single node and wrong for a horizontally scaled one. The Cloudflare build resolves this with a Durable Object; a multi-instance Node deployment would still want the Postgres checkpointer. See [Deployment](#deployment).
 
 **Genuine gaps, ordered by what I would fix first**
 
@@ -368,7 +380,7 @@ This is a Phase 1 proof of concept and the boundary is worth stating plainly. Th
 
 | Phase | Work |
 | :--- | :--- |
-| **Week 5–8** | Replace mock tools with a production MCP server over the PostgreSQL TMS. Swap `MemorySaver` for a durable checkpointer. Ship Workflow 2 (rate-sheet RAG ingestion). |
+| **Week 5–8** | Replace mock tools with a production MCP server over the PostgreSQL TMS, and move the checkpointer onto it. Ship Workflow 2 (rate-sheet RAG ingestion). |
 | **Week 9–12** | Twilio SMS webhooks so the agent can text drivers instructions dynamically. |
 | **Week 13+** | Self-host the Qwen ecosystem on dedicated Proxmox/vLLM servers via Cloudflare Tunnels, for zero variable inference cost and full data residency. |
 

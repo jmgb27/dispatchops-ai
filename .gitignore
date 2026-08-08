@@ -40,3 +40,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Cloudflare local dev secrets
+.dev.vars
+.open-next/
+.wrangler/
+
+# Parked during the Cloudflare build (scripts/cf-build.mjs)
+*.ts.parked

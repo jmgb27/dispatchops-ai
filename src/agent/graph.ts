@@ -16,6 +16,7 @@ import {
   interrupt,
 } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 import {
   AIMessage,
   SystemMessage,
@@ -251,9 +252,24 @@ const workflow = new StateGraph(DispatchState)
   .addEdge("summarize", END);
 
 /**
- * A single checkpointer instance must survive between the request that
- * interrupts and the request that resumes. Cached on globalThis so Next's dev
- * hot-reload doesn't silently strand in-flight approvals.
+ * Compiles the graph against a caller-supplied checkpointer.
+ *
+ * On Cloudflare Workers there is no isolate affinity, so the request that
+ * interrupts and the request that resumes are not guaranteed to share memory.
+ * The Durable Object in `src/server/dispatch-room.ts` owns a persistent
+ * checkpointer and compiles the graph against it.
+ */
+export function compileDispatchGraph(checkpointer: BaseCheckpointSaver) {
+  return workflow.compile({ checkpointer });
+}
+
+export type DispatchGraph = ReturnType<typeof compileDispatchGraph>;
+
+/**
+ * The in-process graph, for `next dev`, `next start` and the test suite. A
+ * single checkpointer instance must survive between the request that interrupts
+ * and the request that resumes, so it is cached on globalThis — otherwise Next's
+ * dev hot-reload silently strands in-flight approvals.
  */
 const globalForGraph = globalThis as unknown as {
   __dispatchCheckpointer?: MemorySaver;

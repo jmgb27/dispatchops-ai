@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+/*
+ * Deliberately a single dark "operations console" look. Dispatch floors run
+ * dark rooms and wall displays; a theme switcher would be noise here.
+ */
+@theme {
+  --color-ink: #0b0f14;
+  --color-panel: #121822;
+  --color-panel-2: #182130;
+  --color-line: #24303f;
+  --color-text: #e6edf5;
+  --color-muted: #8296ac;
+  --color-accent: #4da3ff;
+  --color-ok: #3ddc97;
+  --color-warn: #ffb454;
+  --color-danger: #ff6b6b;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 20% -10%, #16202e 0%, transparent 60%),
+    var(--color-ink);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+/* Scrollbars that don't break the console illusion. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.live-dot {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}

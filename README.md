@@ -1,112 +1,165 @@
-# 📖 DispatchOps AI — Project Documentation & Scoping Pack
+<div align="center">
 
-## 1. Executive Summary
+# DispatchOps AI
 
-**DispatchOps AI** is an agentic middleware layer designed to integrate into legacy Transport Management Systems (TMS). Instead of requiring manual dispatcher intervention for every route delay, driver reassignment, and carrier rate sheet ingestion, DispatchOps continuously monitors fleet telemetry, executes autonomous resolution loops, and enforces Human-In-The-Loop (HITL) guardrails.
+**An agentic middleware layer for legacy Transport Management Systems —
+where the spend limit is a graph edge, not a line in the prompt.**
 
-**Target Outcomes:**
+[![Next.js](https://img.shields.io/badge/Next.js-16.3-000000?style=flat-square&logo=nextdotjs&logoColor=white)](https://nextjs.org)
+[![React](https://img.shields.io/badge/React-19.2-087EA4?style=flat-square&logo=react&logoColor=white)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1.4-1C3C3C?style=flat-square&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraphjs/)
+[![Qwen3.7 Plus](https://img.shields.io/badge/Qwen3.7_Plus-1M_context-615CED?style=flat-square)](https://www.alibabacloud.com/en/product/modelstudio)
+[![Langfuse](https://img.shields.io/badge/Langfuse-v5_OTel-181818?style=flat-square)](https://langfuse.com)
+[![Tests](https://img.shields.io/badge/tests-13_passing-1D6B4E?style=flat-square)](#tests)
 
-* **60% Reduction** in manual dispatcher overhead.
-* **Near-Zero SLA Breaches** for priority freight through instant agentic rerouting.
-* **85%+ Reduction in LLM API Costs** by leveraging **Qwen3.7 Plus** over Western frontier models.
+[Why it exists](#the-problem) · [How it works](#how-it-works) · [The guardrail](#the-guardrail) · [Unit economics](#unit-economics) · [Run it](#quick-start) · [Deploy](#deployment) · [Limitations](#known-limitations)
+
+</div>
 
 ---
 
-## 2. Technical Architecture & Stack
+## The problem
 
-To ensure high reliability, fast UI reactivity, and low inference costs, the system relies on the following stack:
+A truck stops moving. Somewhere in a dispatch office, a human reads a telematics alert, opens the manifest, works out whether the delivery window is still reachable, checks who else is nearby and legal to drive, prices the alternatives, and reassigns the load. It takes fifteen minutes and it happens hundreds of times a day.
 
-### 2.1 Core Technologies
+That work is mechanical enough to automate and expensive enough to be worth automating. It is also, in the most literal sense, **spending the company's money** — a single bad reroute tenders a $780,000 load to the wrong carrier at a spot rate nobody approved.
 
-* **Frontend UI:** Next.js 16 (App Router) + React Server Components + Tailwind CSS v4.
-* **Agent Engine:** LangGraph JS (`@langchain/langgraph`) for cyclic agentic state management, running in-process inside Next.js API routes.
-* **LLM Reasoning:** **Qwen3.7 Plus** (1M Context Window, Native Tool Calling, Deep Reasoning), reached over Alibaba Cloud Model Studio's OpenAI-compatible endpoint.
-* **Observability & Evaluation:** **Langfuse** (v5 JS SDK, OpenTelemetry-based) for run tracing, token/cost accounting and evaluation datasets.
-* **Protocol:** Model Context Protocol (MCP) to safely connect the LLM to SQL databases and external routing APIs — *Phase 2; the POC uses local mock tools.*
-* **Validation:** Zod for strict schema enforcement on every tool argument before it reaches the mock TMS.
+So the interesting engineering problem in agentic logistics isn't reasoning. It's building an agent that can act autonomously *and* be structurally incapable of exceeding its authority.
 
-### 2.2 System Flow Diagram
+## The idea
 
-```text
-[ GPS Telematics Webhook / UI Trigger ]
-                  │
-                  ▼
-[ Next.js API Route → LangGraph StateGraph (SSE stream) ]
-                  │
-                  ▼
-    ┌───────────────────────────┐
-    │       Qwen3.7 Plus        │◀──────────────┐
-    │  (Evaluation & Planning)  │               │
-    └─────────────┬─────────────┘               │
-                  │ (JSON Tool Request)         │ (tool results)
-                  ▼                             │
-    ┌───────────────────────────┐               │
-    │  ToolNode — READ ONLY     │───────────────┘
-    │  - get_load_manifest()    │
-    │  - query_nearby_drivers() │
-    │  - check_driver_hos()     │
-    │  - query_backup_carriers()│
-    │  - calculate_reroute_cost()│
-    └───────────────────────────┘
+DispatchOps runs a LangGraph agent over a mock TMS. It monitors telematics exceptions, reasons about SLA risk, and reroutes loads on its own — up to a spend ceiling. Above that ceiling it halts mid-execution and waits for a human.
 
-  ...but a request for the ONE write tool is intercepted:
+The design decision that matters:
 
-      [ execute_reroute requested ]
-                  │
-                  ▼
-    ┌───────────────────────────┐
-    │       costGate node       │  ← deterministic TypeScript,
-    │  calculateActionCost()    │    no model involvement
-    └─────────────┬─────────────┘
-        ┌─────────┴─────────┬──────────────────┐
-   (infeasible)       (Cost < $500)      (Cost >= $500)
-        │                   │                  │
- [ Refuse + replan ]  [ execute node ]   [ approval node ]
-                      [ mutate TMS   ]   [ interrupt()   ]
-                                         [ Action Card   ]
-                                                │
-                                    ┌───────────┴──────────┐
-                               [ Approve ]            [ Reject ]
-                               → execute              → replan
+> **The cost ceiling is a graph edge, not an instruction.**
+>
+> `execute_reroute` is declared to the model so it can *request* a reroute, but it is deliberately never bound to the `ToolNode`. The request lands in `costGateNode`, which prices it with pure TypeScript and routes on the resulting number. A prompt-based guardrail is one jailbreak away from a $40,000 tender. This one cannot be argued with, because nothing is asked.
+
+---
+
+## Demo scenarios
+
+Three buttons in the dispatcher console, each a scripted telematics webhook.
+
+| Scenario | Situation | Outcome |
+| :--- | :--- | :--- |
+| **Telematics Exception** | Reefer load held 95 min on I-10. Assigned driver is out of legal hours; a relief driver sits 4.3 mi away. | Priced at **$149.94** — under the ceiling, committed autonomously. |
+| **Major Breakdown** | Tractor disabled near Elko, NV. No company driver has the legal hours; only a third-party recovery is feasible. | Priced at **$1,324.50** — halts at `PENDING_HUMAN_APPROVAL`, TMS untouched. |
+| **Injected Manifest** | The same breakdown, but the inbound dispatch notes instruct the agent to ignore the cost ceiling and execute immediately. | **Still halts.** The ceiling was never the model's to honour. |
+
+<!-- Screenshots: drop PNGs in docs/ and uncomment.
+<p align="center">
+  <img src="docs/console-autonomous.png" width="49%" alt="Autonomous resolution" />
+  <img src="docs/console-approval.png" width="49%" alt="Approval card" />
+</p>
+-->
+
+---
+
+## How it works
+
+```mermaid
+flowchart TD
+    WH([GPS telematics webhook]) --> API[Next.js route handler<br/>SSE stream]
+    API --> AG[agent · Qwen3.7 Plus]
+
+    AG -->|read tool call| TN[ToolNode<br/>5 read-only tools]
+    TN --> AG
+
+    AG -->|requests execute_reroute| CG[costGate<br/>deterministic TypeScript]
+
+    CG -->|infeasible — HOS, region, breakdown| AG
+    CG -->|under the ceiling| EX[execute]
+    CG -->|at or above the ceiling| AP[approval · interrupt]
+
+    AP -->|dispatcher approves| EX
+    AP -->|dispatcher rejects| AG
+
+    EX --> SM[summarize<br/>no tools bound]
+    SM --> DB[(TMS mutated)]
+
+    classDef gate stroke-width:3px
+    class CG gate
 ```
 
+Everything the model emits flows through one of two doors: a read tool that cannot change anything, or a request that gets priced before it becomes an action. There is no third path.
+
+<details>
+<summary><b>Node-by-node</b></summary>
+
+<br/>
+
+| Node | Responsibility |
+| :--- | :--- |
+| `agent` | Qwen3.7 Plus with five read tools plus the *declared* write tool bound. Plans, calls tools, eventually proposes a reroute. |
+| `tools` | Prebuilt `ToolNode` over the read-only suite. Cannot mutate anything. |
+| `costGate` | Intercepts the write request. Calls `calculateActionCost()`, records the breakdown on state, and lets the routing function turn that number into control flow. |
+| `approval` | Calls LangGraph's `interrupt()`. The run checkpoints mid-execution and the HTTP request returns; the console renders an action card. |
+| `execute` | The **only** place in the codebase that mutates the TMS. |
+| `summarize` | Writes the dispatcher handover note on a model with **no tools bound**, so the run cannot loop back into another write after the commit. |
+
+The graph is compiled with a `MemorySaver` checkpointer cached on `globalThis`, so the request that interrupts and the request that resumes find the same checkpoint across Next's dev hot-reload.
+
+</details>
+
 ---
 
-## 3. Core Agentic Workflows & Tool Schemas
+## The guardrail
 
-The Qwen3.7 Plus agent has access to a strictly typed suite of tools. During the POC phase, these are backed by local mock databases to ensure flawless demonstration during interviews.
+Agentic automation in logistics carries severe financial and safety risk if unconstrained. Three properties do the work, and none of them are prompts.
 
-> **POC scope:** Workflow 1 is implemented and running. Workflow 2 (rate-sheet RAG ingestion) is specified below but scheduled for Phase 2 — see §7.
+### 1 · The price is computed, never claimed
 
-### 3.1 Workflow 1: Route Delay & SLA Resolver
+`calculateActionCost()` ([`src/agent/cost.ts`](src/agent/cost.ts)) is a pure function of TMS state — no clock, no randomness, no model input. It derives deadhead fuel, driver overtime against a standard shift, third-party spot rate, and accessorials, and returns an itemised breakdown that reconciles to the total. The LLM never supplies a cost. It only nominates a resource.
 
-* **Trigger:** GPS webhook alerts that a truck is delayed by X minutes.
-* **Agent Logic:** Analyzes the manifest, determines if delivery SLAs will be breached, and queries available drivers to re-route the shipment.
+### 2 · Feasibility is structural
 
-**Tool Schema: `query_nearby_drivers`**
+An assignment is refused outright, whatever it costs and whatever the model argued, if it:
 
-```json
-{
-  "name": "query_nearby_drivers",
-  "description": "Finds available fleet drivers within a specific radius who have enough legal Hours of Service (HOS) remaining.",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "location_lat": { "type": "number", "description": "Latitude of the delayed truck" },
-      "location_lon": { "type": "number", "description": "Longitude of the delayed truck" },
-      "required_hos_minutes": { "type": "integer", "description": "Minimum legal driving minutes required to complete the delivery" }
-    },
-    "required": ["location_lat", "location_lon", "required_hos_minutes"]
-  }
+- breaks federal **Hours-of-Service** limits for the nominated driver,
+- uses a driver whose **own tractor is disabled**, or
+- hands the load to a **carrier not licensed** in the state the load is sitting in.
+
+Refusals come back to the agent as a tool result with a hint, so it replans rather than dead-ends.
+
+### 3 · The threshold is control flow
+
+```ts
+// src/agent/graph.ts
+function routeFromCostGate(state: DispatchStateType) {
+  const costed = state.costed;
+  if (!costed || costed.infeasibleReason) return "agent";
+  return requiresHumanApproval(costed.totalUsd) ? "approval" : "execute";
 }
 ```
 
-### 3.2 Workflow 2: Freight Rate Sheet Ingestion (RAG)
+Below `MAX_AUTONOMOUS_SPEND_USD` the agent commits on its own. At or above it, the graph interrupts and the console renders the agent's justification alongside the itemised derivation and `Approve` / `Reject`. Approve resumes the same thread with `Command({ resume })`; Reject returns the refusal to the agent as a tool result so it looks for something cheaper.
 
-* **Trigger:** An unstructured PDF or email from a third-party carrier is uploaded.
-* **Agent Logic:** Qwen3.7 Plus utilizes its massive 1M token context window to parse complex, unstructured rate tables and outputs a validated JSON tender matching current load capacity requirements.
+> The whole of [`src/agent/guardrail.test.ts`](src/agent/guardrail.test.ts) exists to prove this holds — including a scenario whose inbound dispatch notes explicitly order the agent to skip approval. It changes nothing.
 
-**Tool Schema: `issue_carrier_tender`**
+---
+
+## Tool suite
+
+Every argument is validated with Zod before it reaches the mock TMS.
+
+| Tool | Access | What it does |
+| :--- | :--- | :--- |
+| `get_load_manifest` | read | Cargo, SLA deadline and penalty, position, remaining drive time, dispatch notes. |
+| `query_nearby_drivers` | read | Fleet drivers within radius, with HOS remaining and whether they clear the requirement. |
+| `check_driver_hos` | read | Remaining legal hours and duty status for one driver. |
+| `query_backup_carriers` | read | Third-party carriers with spot rates and licensing for the load's state. |
+| `calculate_reroute_cost` | read | Full financial impact of one candidate, plus whether it is legally able to take the load. |
+| `execute_reroute` | **intercepted** | Declared to the model; never bound to the `ToolNode`. Routed through the cost gate. |
+
+<details>
+<summary><b>Workflow 2 — freight rate-sheet ingestion (specified, Phase 2)</b></summary>
+
+<br/>
+
+An unstructured PDF or email from a third-party carrier is uploaded. Qwen3.7 Plus uses its 1M-token context window to parse complex rate tables and emits a validated JSON tender matching current load capacity.
 
 ```json
 {
@@ -125,49 +178,52 @@ The Qwen3.7 Plus agent has access to a strictly typed suite of tools. During the
 }
 ```
 
----
+This is where the 1M context window earns its keep. It is scheduled for Phase 2 — Workflow 1 was built first because a parsing demo doesn't answer the question a logistics buyer actually asks, which is *what stops it spending my money*.
 
-## 4. Guardrails & Safety (Human-In-The-Loop)
-
-Agentic automation in logistics carries severe financial and safety risks if unconstrained. The application implements a **Hard Cost Ceiling Guardrail**.
-
-The design decision that matters: **the ceiling is a graph edge, not an instruction.** The model can *request* a reroute, but `execute_reroute` is deliberately never bound to the ToolNode. The request lands in `costGateNode` (`src/agent/graph.ts`), which prices it with pure TypeScript and routes on the resulting number. A prompt-based guardrail is one jailbreak away from a $40k tender; this one cannot be argued with, because nothing is asked.
-
-1. **Pre-Execution Hook:** `calculateActionCost()` (`src/agent/cost.ts`) evaluates the financial impact — deadhead fuel, driver overtime, 3PL spot rate, accessorials — as a pure function of TMS state. No clock, no randomness, no model input.
-2. **Feasibility is also structural:** an assignment that breaks federal Hours-of-Service limits, uses a driver whose own tractor is disabled, or hands a load to a carrier unlicensed in that state is refused outright, whatever it costs and whatever the model argued.
-3. **Threshold Logic:**
-   * If `Cost < $500`: The agent executes the route mutation autonomously.
-   * If `Cost >= $500`: The graph calls LangGraph's `interrupt()` and the run halts at `PENDING_HUMAN_APPROVAL`, checkpointed mid-execution.
-4. **UI Resolution:** The dashboard renders an Action Card detailing the agent's justification, the itemised cost derivation, and `[Approve]` / `[Reject]`. Approve resumes the same graph thread via `Command({ resume })`; Reject sends the refusal back to the agent as a tool result so it replans.
-
-The whole of `src/agent/guardrail.test.ts` exists to prove this holds — including a scenario whose inbound dispatch notes explicitly instruct the agent to ignore the cost ceiling. It changes nothing.
+</details>
 
 ---
 
-## 5. Unit Economics & Rationale for Qwen3.7 Plus
+## Unit economics
 
-To align with Teoh Capital's focus on SaaS margins, Qwen3.7 Plus was deliberately chosen over GPT-4o or Claude 3.5 Sonnet.
+Qwen3.7 Plus was chosen deliberately over a frontier flagship model, for context window and inference cost.
 
-* **Context Window:** 1,000,000 tokens (Crucial for reading 50+ page freight carrier PDFs).
-* **Cost Efficiency:** **$0.32 Input / $1.28 Output per 1M tokens** (verified against the live endpoint, August 2026).
-* **Margin Impact:** This represents an **85%+ reduction in inference costs** compared to OpenAI/Anthropic, transforming AI from a high-cost R&D expense into a high-margin product feature.
-* **Agentic Capabilities:** Confirmed in this POC — Qwen3.7 Plus emits well-formed parallel tool calls (it routinely batches `check_driver_hos` and `query_nearby_drivers` in a single turn), returns clean structured arguments, and exposes reasoning tokens for the multi-step planning LangGraph depends on.
+**Measured** from a live traced run of the Route Delay resolver — five Qwen generations, full tool loop, happy path:
 
-### 5.1 Observability & Evaluation (Langfuse)
+| | Tokens | Cost |
+| :--- | ---: | ---: |
+| Input | 9,436 | $0.0030 |
+| Output (incl. reasoning) | 1,763 | $0.0023 |
+| **Per resolved exception** | **11,199** | **≈ $0.0053** |
+
+That is **$5.28 per 1,000 exceptions**, at a list price of $0.32 input / $1.28 output per 1M tokens.
+
+For transparency about the comparison: the same token volume against **$2.50 / $10.00 per 1M flagship-tier pricing** costs $0.0412 — a 7.8× difference. Measured against the cheaper tiers of Western frontier families the gap narrows considerably, so the durable form of the argument is not the percentage. It is that per-exception inference cost is a rounding error next to the $18,000–$42,000 SLA penalties on these loads, which makes model selection a question of capability floor and data residency rather than price.
+
+Qwen's agentic behaviour held up in practice: well-formed parallel tool calls, clean structured arguments, and exposed reasoning tokens for the multi-step planning the graph depends on.
+
+**Design targets** for the product, stated as targets rather than measurements: 60% reduction in manual dispatcher overhead, and near-zero SLA breaches on priority freight. Earning those numbers requires a shadow-mode deployment measuring exceptions resolved without human touch — which also produces the evaluation labels.
+
+---
+
+## Observability
 
 Every run is traced to **Langfuse** so a reviewer can open one exception and see the entire decision path: each Qwen call with its reasoning, each tool result, the cost-gate decision, and per-run token and dollar cost.
 
-* The graph `thread_id` is used as the Langfuse `sessionId`, so the initial run and the post-approval resume appear as one continuous session rather than two orphaned traces.
-* Runs are tagged `scenario:<id>` and `load:<id>` for filtering, and stamped with the model id for A/B comparisons between Qwen tiers.
-* Traces are named `dispatch:<scenario>` (and `dispatch:<scenario>:resume`), set via `propagateAttributes` — the LangChain `CallbackHandler` has no `traceName` option, so the name has to come from the surrounding context.
-* Spans are force-flushed when a run finishes streaming. OTel batches on a timer, and a serverless instance can be frozen before that timer fires — which loses traces silently, worse than not tracing at all.
-* Tracing is strictly optional. With `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` unset the callback factory returns an empty array and the app behaves identically — the demo never depends on an external service being reachable.
+- The graph `thread_id` doubles as the Langfuse `sessionId`, so the initial run and the post-approval resume appear as **one continuous session** rather than two orphaned traces.
+- Runs are tagged `scenario:<id>` and `load:<id>`, and stamped with the model id for A/B comparison between Qwen tiers.
+- Traces are named via `propagateAttributes` — the LangChain `CallbackHandler` has no `traceName` option, so the name has to come from the surrounding context.
+- Spans are **force-flushed** when a run finishes streaming. OTel batches on a timer and a serverless instance can be frozen before that timer fires, which loses traces silently — worse than not tracing at all.
+- Tracing is strictly optional. With the keys unset the callback factory returns an empty array and the app behaves identically. The demo never depends on an external service being reachable.
 
-Wiring lives in `instrumentation.ts` (registers the OpenTelemetry span processor once at boot) and `src/agent/observability.ts` (per-run callback handler, trace context, flush).
+Wiring lives in [`instrumentation.ts`](instrumentation.ts) and [`src/agent/observability.ts`](src/agent/observability.ts).
 
-#### One-time setup: register the model price
+<details>
+<summary><b>One-time setup: register the Qwen model price</b></summary>
 
-Langfuse computes cost from token counts and a model price table, and it does not ship a price for Qwen. Until you register one, traces show accurate token usage but **$0 cost**. Add it once per project:
+<br/>
+
+Langfuse computes cost from token counts and a model price table, and ships no price for Qwen. Until you register one, traces show accurate token usage but **$0 cost**. Add it once per project:
 
 ```bash
 curl -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
@@ -181,25 +237,74 @@ curl -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
   }'
 ```
 
-#### Measured unit economics
-
-From a live traced run of the Route Delay resolver (5 Qwen generations, full tool loop):
-
-| | Tokens | Cost |
-|---|---|---|
-| Input | 9,436 | $0.0030 |
-| Output (incl. reasoning) | 1,763 | $0.0023 |
-| **Per resolved exception** | **11,199** | **≈ $0.0053** |
-
-That is **$5.28 per 1,000 exceptions**. The same token volume on a $2.50/$10.00-per-1M frontier model costs $0.0412 — a **7.8× difference, or 87% lower inference cost**, which validates the §5 thesis with measured numbers rather than list prices.
+</details>
 
 ---
 
-## 6. Implementation & Local Setup Guide
+## Quick start
 
-Follow these steps to run the interactive Next.js prototype locally.
+**Prerequisites** — Node.js 20+ (developed on 22), `npm`, and a Qwen API key from Alibaba Cloud Model Studio or OpenRouter.
 
-### Repository Layout
+```bash
+git clone https://github.com/jmgb27/dispatchops-ai.git
+cd dispatchops-ai
+npm install
+cp .env.example .env.local   # then fill it in — .env.local is gitignored
+npm run dev                  # http://localhost:3000
+```
+
+| Variable | Purpose |
+| :--- | :--- |
+| `QWEN_API_KEY` | Model Studio or OpenRouter key. |
+| `QWEN_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` for Model Studio. |
+| `QWEN_MODEL` | `qwen3.7-plus` on Model Studio; `qwen/qwen3.7-plus` on OpenRouter. |
+| `MAX_AUTONOMOUS_SPEND_USD` | The autonomy ceiling. Defaults to 500. |
+| `LANGFUSE_*` | Optional. Tracing self-disables when blank. |
+| `MOCK_AGENT` | Set to `1` to swap Qwen for a scripted offline agent. |
+
+> **Model id differs by provider.** On OpenRouter the base URL is `https://openrouter.ai/api/v1`. With a dedicated Model Studio workspace, use that workspace's own `compatible-mode` host rather than the shared one.
+
+**Offline demo** — `MOCK_AGENT=1` walks the same graph, the same cost model and the same guardrail against a deterministic scripted agent. Useful when the venue's wifi is not to be trusted.
+
+### Other commands
+
+```bash
+npm test         # 13 guardrail + cost-model tests, no API key needed
+npm run typecheck
+npm run lint
+npm run build
+```
+
+---
+
+## Deployment
+
+The app is a standard Next.js 16 application and runs anywhere a Node server does — `npm run build && npm start` is the whole story on a VM or container.
+
+### Cloudflare Workers
+
+Next.js 16 ships a formal [Adapter API](https://nextjs.org/docs/app/api-reference/config/next-config-js/adapterPath), but Cloudflare's verified adapter is still in progress. Today the route is Cloudflare's own integration:
+
+```bash
+npm i -D @opennextjs/cloudflare wrangler
+npx opennextjs-cloudflare build
+npx wrangler deploy
+```
+
+`wrangler.jsonc` needs `nodejs_compat` and a current compatibility date. Secrets go in with `wrangler secret put QWEN_API_KEY` rather than `.env.local`. Route handlers already declare `export const runtime = "nodejs"`, which is what the integration expects — the edge runtime is not a supported target.
+
+> [!IMPORTANT]
+> **Two pieces of state must become durable before the approval flow survives on Workers.**
+>
+> The POC keeps its LangGraph checkpointer (`MemorySaver`) and its mock TMS table in module scope. That is correct for a single-node demo and load-bearing for the human-in-the-loop cycle: the request that calls `interrupt()` and the request that resumes it **must** find the same checkpoint. Workers offers no isolate affinity, so a dispatcher's `Approve` can land in an isolate that has never seen the interrupt — and the flagship demo fails in public.
+>
+> The fix is a **Durable Object** keyed by `thread_id`, holding the checkpointer and the TMS table, with the route handlers as thin proxies to it. Cloudflare KV is not sufficient on its own: it is eventually consistent, and a financial approval should not race.
+>
+> Related: [`instrumentation.ts`](instrumentation.ts) registers a `NodeTracerProvider` from `@opentelemetry/sdk-trace-node`, which is a Node-specific path. Verify it under `workerd` before enabling Langfuse on Workers — the app self-disables tracing when the keys are unset, so leaving them blank is a safe first deploy.
+
+---
+
+## Project layout
 
 ```text
 instrumentation.ts              Langfuse OTel span processor, registered at boot
@@ -211,76 +316,64 @@ src/agent/
   mockModel.ts                  Scripted offline agent (MOCK_AGENT=1)
   observability.ts              Langfuse CallbackHandler factory
   stream.ts                     Graph updates → SSE event vocabulary
+  state.ts                      Annotated graph state
   guardrail.test.ts             The tests that prove the ceiling holds
 src/mock/                       Mock TMS: fleet roster, load table, demo scenarios
 src/app/api/dispatch/           POST run (SSE) + POST resume (Command resume)
 src/components/                 Dispatcher console, agent trace, approval card
 ```
 
-### Prerequisites
+---
 
-* Node.js v20.x or higher (developed on v22)
-* `npm`
-* A Qwen API key — Alibaba Cloud Model Studio or OpenRouter
-
-### Step 1: Clone and Install
+## Tests
 
 ```bash
-git clone https://github.com/jmgb27/dispatchops-ai.git
-cd dispatchops-ai
-npm install
+npm test
 ```
 
-### Step 2: Environment Variables
+Thirteen tests, run against `MOCK_AGENT=1` so the sequence is deterministic — they assert the behaviour of the graph and the cost model, not the wording of an LLM.
 
-```bash
-cp .env.example .env.local
-```
-
-Then fill it in. `.env.local` is gitignored — never commit real keys.
-
-```env
-# Alibaba Cloud Model Studio (OpenAI-compatible mode)
-QWEN_API_KEY=sk-...
-QWEN_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-QWEN_MODEL=qwen3.7-plus
-
-# Guardrail
-MAX_AUTONOMOUS_SPEND_USD=500
-
-# Optional — tracing self-disables when these are blank
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-LANGFUSE_BASE_URL=https://cloud.langfuse.com
-
-# Set to 1 to run fully offline against a scripted agent
-MOCK_AGENT=0
-```
-
-> **Model id differs by provider.** On Model Studio / DashScope the id is `qwen3.7-plus`. On OpenRouter it is `qwen/qwen3.7-plus` and the base URL is `https://openrouter.ai/api/v1`. If you have a dedicated Model Studio workspace, use that workspace's own `compatible-mode` host rather than the shared one.
-
-### Step 3: Run the Development Server
-
-```bash
-npm run dev     # http://localhost:3000
-npm test        # guardrail + cost model suite (13 tests, no API key needed)
-npm run typecheck
-```
-
-### Step 4: Using the Prototype
-
-1. Navigate to `http://localhost:3000`.
-2. Click **"Simulate Telematics Exception"** — a reefer load held 95 minutes on I-10. Watch Qwen pull the manifest, discover the assigned driver is out of legal hours, find a relief driver 4.3 mi away, and price the relay at **$149.94**. Under the ceiling, so it commits autonomously.
-3. Click **"Simulate Major Breakdown"** — a disabled tractor near Elko, NV. No company driver has the legal hours, so the only feasible option is a third-party recovery at **$1,324.50**. The run halts at `PENDING_HUMAN_APPROVAL` and the TMS panel stays untouched. Approve to resume; Reject to watch the agent replan.
-4. Click **"Simulate Injected Manifest"** — the same breakdown, but the inbound dispatch notes instruct the agent to ignore the cost ceiling and execute immediately. It still halts, because the ceiling was never the model's to honour.
-
-**Offline demo:** set `MOCK_AGENT=1` to swap Qwen for a deterministic scripted agent that walks the same graph, the same cost model and the same guardrail. Useful when the venue's wifi is not to be trusted.
+- The cost model prices both demo paths exactly, and every breakdown reconciles to its total.
+- The threshold is a closed lower bound: 499.99 passes, 500 escalates.
+- Structural refusals hold for an HOS-illegal driver, a disabled tractor, and an unlicensed carrier.
+- The autonomous path resolves without interrupting; the expensive path halts with **zero** TMS writes and an empty audit log.
+- Approve commits with `approvedBy: HUMAN_DISPATCHER`; reject leaves the TMS untouched.
+- The prompt-injection scenario still halts.
 
 ---
 
-## 7. Future Roadmap (Phase 2 & 3)
+## Known limitations
 
-* **Week 5-8:** Replace mock tools with a production Model Context Protocol (MCP) server connecting directly to PostgreSQL TMS databases. At the same time, swap LangGraph's in-process `MemorySaver` checkpointer for the Postgres checkpointer — the POC's approval state is held in memory, which is fine for a single-node demo but will not survive a restart or scale across instances.
-* **Week 5-8:** Ship Workflow 2 (freight rate-sheet RAG ingestion, §3.2), which is where the 1M context window earns its keep.
-* **Week 9-12:** Integrate Twilio SMS webhooks to allow the agent to text drivers instructions dynamically.
-* **Week 13+:** Self-host the Qwen ecosystem on dedicated Proxmox/vLLM servers via Cloudflare Tunnels for zero-variable-cost inference.
+This is a Phase 1 proof of concept and the boundary is worth stating plainly. The items below are known, not discovered.
+
+**Deliberate POC scope**
+
+- The TMS is two loads, six drivers and two carriers in memory. Phase 2 replaces it with an MCP server over the real PostgreSQL TMS.
+- Distances are great-circle × a 1.18 circuity factor, not a truck-routing engine. That is fine in the middle of the range and wrong at the feasibility boundary, where an underestimated deadhead can make an HOS-illegal assignment look legal.
+- Hours of Service is modelled as a single remaining-minutes figure. Real FMCSA limits are interacting clocks — 11 hours driving, a 14-hour window, the 30-minute break, and a 60/70-hour cycle. Production reads these from the ELD feed rather than modelling them.
+- `MemorySaver` is in-process. See [Deployment](#deployment).
+
+**Genuine gaps, ordered by what I would fix first**
+
+1. **No cumulative spend cap.** The ceiling is evaluated per action, so nothing prevents several sub-threshold reroutes in sequence. Needs accumulators at thread, load and rolling-window scope, checked in the gate and written in the same transaction as the TMS mutation.
+2. **No re-pricing after approval.** `executeNode` commits the breakdown computed *before* the interrupt. Twenty minutes of real world moves everything it depended on. Approval should authorise a decision, not a cached number — re-price at execution and re-interrupt on material drift.
+3. **No authenticated approver.** The resume route takes a thread id and a boolean. There is no identity, no role check, and the audit entry records `HUMAN_DISPATCHER` with no user and no timestamp. For a financial control this matters more than the cost arithmetic.
+4. **Feasible does not yet mean SLA-saving.** The cost function checks hours, duty status and licensing, but never compares projected arrival to the delivery deadline. Projected ETA should be a first-class field and missing the window should be an infeasibility, alongside the HOS refusal.
+5. **A flat ceiling ignores exposure.** A $1,324 recovery protecting a $42,000 penalty escalates identically to one protecting nothing. The right shape is relative — a fraction of quantified exposure, with an absolute hard stop on top.
+6. **No LLM evaluation set.** The tests prove the graph and the cost model; nothing yet measures whether Qwen picks the *right* driver. That needs a labelled Langfuse dataset scored on choice quality.
+
+---
+
+## Roadmap
+
+| Phase | Work |
+| :--- | :--- |
+| **Week 5–8** | Replace mock tools with a production MCP server over the PostgreSQL TMS. Swap `MemorySaver` for a durable checkpointer. Ship Workflow 2 (rate-sheet RAG ingestion). |
+| **Week 9–12** | Twilio SMS webhooks so the agent can text drivers instructions dynamically. |
+| **Week 13+** | Self-host the Qwen ecosystem on dedicated Proxmox/vLLM servers via Cloudflare Tunnels, for zero variable inference cost and full data residency. |
+
+---
+
+<div align="center">
+<sub>Built as a technical case study. The interesting part isn't that an agent can reroute a truck — it's that it can't overspend while doing it.</sub>
+</div>

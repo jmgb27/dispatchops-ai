@@ -146,7 +146,7 @@ Follow these steps to run the interactive Next.js prototype locally.
 ### Step 1: Clone and Install
 
 ```bash
-git clone https://github.com/your-username/dispatchops-ai.git
+git clone https://github.com/jmgb27/dispatchops-ai.git
 cd dispatchops-ai
 npm install
 ```

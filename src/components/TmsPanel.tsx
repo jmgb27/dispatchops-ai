@@ -2,14 +2,15 @@
 
 import type { AuditEntry, Load } from "@/mock/loads";
 
-import { usd } from "./format";
+import { usd0 } from "./format";
 
-const STATUS_TONE: Record<string, string> = {
-  IN_TRANSIT: "text-muted",
-  DELAYED: "text-warn",
-  DISABLED: "text-danger",
-  REASSIGNED: "text-ok",
-  TENDERED_TO_CARRIER: "text-ok",
+/** Status codes are the system's words; these are the ones people use. */
+const STATUS: Record<string, { label: string; tone: string }> = {
+  IN_TRANSIT: { label: "on the road", tone: "text-muted" },
+  DELAYED: { label: "running late", tone: "text-warn" },
+  DISABLED: { label: "broken down", tone: "text-danger" },
+  REASSIGNED: { label: "reassigned", tone: "text-ok" },
+  TENDERED_TO_CARRIER: { label: "given to a carrier", tone: "text-ok" },
 };
 
 export function TmsPanel({
@@ -23,50 +24,54 @@ export function TmsPanel({
     <section className="rounded-xl border border-line bg-panel">
       <header className="border-b border-line px-4 py-3">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-muted">
-          Mock TMS — system of record
+          The dispatch board
         </h2>
       </header>
 
       <div className="divide-y divide-line/60">
-        {loads.map((load) => (
-          <div key={load.loadId} className="px-4 py-3">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="font-mono text-sm text-text">{load.loadId}</span>
-              <span
-                className={`font-mono text-[11px] ${STATUS_TONE[load.status] ?? "text-muted"}`}
-              >
-                {load.status}
+        {loads.map((load) => {
+          const status = STATUS[load.status] ?? {
+            label: load.status,
+            tone: "text-muted",
+          };
+          return (
+            <div
+              key={load.loadId}
+              className="flex items-baseline justify-between gap-3 px-4 py-2.5"
+            >
+              <div className="min-w-0">
+                <div className="font-mono text-xs text-text">
+                  {load.loadId.replace(/^LOAD-/, "Load ")}
+                </div>
+                <div className="text-xs text-muted">
+                  {load.origin} → {load.destination}
+                </div>
+              </div>
+              <span className={`shrink-0 text-[11px] ${status.tone}`}>
+                {status.label}
               </span>
             </div>
-            <div className="mt-1 text-xs text-muted">
-              {load.origin} → {load.destination}
-            </div>
-            <div className="mt-1 text-xs text-muted">
-              assigned{" "}
-              <span className="font-mono text-text">{load.assignedDriverId}</span>
-              {" · "}SLA in {load.minutesUntilSlaDeadline} min
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="border-t border-line px-4 py-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
-          Audit log
+          Changes made
         </h3>
         {audit.length === 0 ? (
-          <p className="mt-2 text-xs text-muted">
-            No mutations. Nothing has been written to the TMS.
+          <p className="mt-2 text-xs leading-relaxed text-muted">
+            None. Nothing on this board has been touched.
           </p>
         ) : (
-          <ul className="mt-2 space-y-2">
+          <ul className="mt-2 space-y-2.5">
             {audit.map((entry, i) => (
-              <li key={i} className="text-xs leading-relaxed">
-                <span className="font-mono text-text">{entry.loadId}</span>{" "}
-                <span className="text-muted">{entry.detail}</span>{" "}
+              <li key={i} className="text-xs leading-relaxed text-muted">
                 <span className="font-mono text-text">
-                  {usd(entry.costUsd)}
-                </span>
+                  {entry.loadId.replace(/^LOAD-/, "Load ")}
+                </span>{" "}
+                {entry.detail}{" "}
+                <span className="text-text">{usd0(entry.costUsd)}</span>
                 <div
                   className={
                     entry.approvedBy === "HUMAN_DISPATCHER"
@@ -75,8 +80,8 @@ export function TmsPanel({
                   }
                 >
                   {entry.approvedBy === "HUMAN_DISPATCHER"
-                    ? "authorised by dispatcher"
-                    : "executed autonomously"}
+                    ? "you approved this"
+                    : "done automatically"}
                 </div>
               </li>
             ))}

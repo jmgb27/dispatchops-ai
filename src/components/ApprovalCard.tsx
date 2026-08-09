@@ -18,125 +18,61 @@ export function ApprovalCard({
 
   return (
     <section className="rounded-xl border border-warn/50 bg-panel shadow-[0_0_0_1px_rgba(255,180,84,0.08),0_18px_40px_-24px_rgba(0,0,0,0.9)]">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-5 py-3.5">
+      <header className="flex items-center gap-2.5 border-b border-line px-5 py-3.5">
         <span className="live-dot h-2 w-2 rounded-full bg-warn" />
         <h2 className="text-sm font-semibold tracking-wide text-warn">
-          Needs your approval
+          Your decision
         </h2>
-        <span className="ml-auto text-xs text-muted">
-          Load {payload.loadId.replace(/^LOAD-/, "")}
-          {payload.customer ? ` · ${payload.customer}` : ""}
-        </span>
       </header>
 
       <div className="space-y-4 px-5 py-4">
         {/*
-         * The comparison, first and largest. Without it the card asks someone to
-         * approve a four-figure spend against no context, which is the single
-         * thing that made the demo hard to read.
+         * The trade, first and largest: what the fix costs against what going
+         * wrong costs. Without the comparison the card asks someone to approve a
+         * four-figure spend with no way to judge it.
          */}
-        {penalty > 0 && (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-lg border border-line bg-panel-2 px-4 py-3">
-              <div className="text-xs text-muted">Cost of this fix</div>
-              <div className="mt-1 text-2xl font-semibold text-warn">
-                {usd(breakdown.totalUsd)}
-              </div>
-            </div>
-            <div className="rounded-lg border border-danger/30 bg-panel-2 px-4 py-3">
-              <div className="text-xs text-muted">
-                Cost of delivering this late
-              </div>
-              <div className="mt-1 text-2xl font-semibold text-danger">
-                {usd0(penalty)}
-              </div>
+        <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+          <div>
+            <div className="text-xs text-muted">Spend now</div>
+            <div className="mt-0.5 text-3xl font-semibold text-warn">
+              {usd0(breakdown.totalUsd)}
             </div>
           </div>
-        )}
+          {penalty > 0 && (
+            <>
+              <div className="pb-1.5 text-sm text-muted">to avoid</div>
+              <div>
+                <div className="text-xs text-muted">A late-delivery penalty</div>
+                <div className="mt-0.5 text-3xl font-semibold text-danger">
+                  {usd0(penalty)}
+                </div>
+              </div>
+              <div className="pb-1.5 text-sm text-ok">
+                Net {usd0(savings)} saved
+              </div>
+            </>
+          )}
+        </div>
 
         <p className="text-sm leading-relaxed text-text">
-          {penalty > 0 ? (
-            <>
-              Spending <strong>{usd(breakdown.totalUsd)}</strong> now avoids a{" "}
-              <strong>{usd0(penalty)}</strong> late-delivery penalty
-              {payload.customer ? ` for ${payload.customer}` : ""} — a net{" "}
-              <strong className="text-ok">{usd0(savings)}</strong> saved.{" "}
-            </>
-          ) : (
-            <>This fix costs {usd(breakdown.totalUsd)}. </>
-          )}
-          It is over the {usd0(payload.thresholdUsd)} limit the assistant is
-          allowed to spend on its own, so it stopped and is waiting for your
-          decision. Nothing has been changed yet.
-        </p>
-
-        <div className="rounded-lg border border-line bg-panel-2 px-4 py-3 text-sm leading-relaxed text-text">
-          The assistant wants to hand this load to{" "}
+          Hand load {payload.loadId.replace(/^LOAD-/, "")} to{" "}
           <strong className="text-warn">{payload.resourceName}</strong>
           {payload.resourceKind === "THIRD_PARTY_CARRIER"
             ? ", an outside carrier"
             : ", one of your own drivers"}
-          .
-          {payload.cargo && (
-            <div className="mt-1.5 text-xs text-muted">
-              Cargo: {payload.cargo}
-              {payload.minutesUntilSlaDeadline !== undefined &&
-                ` · due in ${humanMinutes(payload.minutesUntilSlaDeadline)}`}
-            </div>
-          )}
-        </div>
+          {payload.minutesUntilSlaDeadline !== undefined &&
+            ` — due in ${humanMinutes(payload.minutesUntilSlaDeadline)}`}
+          . Nothing has been changed yet.
+        </p>
 
-        {payload.justification && (
-          <div>
-            <div className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
-              Why it picked this option
-            </div>
-            <blockquote className="border-l-2 border-line pl-3 text-sm italic leading-relaxed text-muted">
-              {payload.justification}
-            </blockquote>
-          </div>
-        )}
-
-        <div>
-          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
-            How the {usd(breakdown.totalUsd)} breaks down
-          </div>
-          <div className="overflow-hidden rounded-lg border border-line">
-            <table className="w-full text-sm">
-              <tbody>
-                {breakdown.lineItems.map((li) => (
-                  <tr key={li.label} className="border-b border-line/70">
-                    <td className="px-3 py-2 text-text">
-                      {li.label}
-                      <div className="text-xs text-muted">{li.basis}</div>
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono text-text align-top">
-                      {usd(li.amountUsd)}
-                    </td>
-                  </tr>
-                ))}
-                <tr className="bg-panel-2">
-                  <td className="px-3 py-2.5 font-semibold text-text">Total</td>
-                  <td className="px-3 py-2.5 text-right font-mono font-semibold text-warn">
-                    {usd(breakdown.totalUsd)}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p className="mt-1.5 text-xs text-muted">
-            These figures are worked out by the system, not written by the AI.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-3 pt-1">
+        <div className="flex flex-wrap gap-3">
           <button
             type="button"
             disabled={busy}
             onClick={() => onDecision(true)}
             className="rounded-lg bg-ok px-5 py-2.5 text-sm font-semibold text-ink transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Approve {usd(breakdown.totalUsd)}
+            Approve {usd0(breakdown.totalUsd)}
           </button>
           <button
             type="button"
@@ -144,9 +80,54 @@ export function ApprovalCard({
             onClick={() => onDecision(false)}
             className="rounded-lg border border-danger/60 px-5 py-2.5 text-sm font-semibold text-danger transition hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Reject — find something cheaper
+            Reject
           </button>
         </div>
+
+        {/*
+         * Everything a dispatcher would want before signing off, but folded away
+         * — on screen at all times it buried the two numbers and the buttons.
+         */}
+        <details className="border-t border-line pt-3">
+          <summary className="cursor-pointer select-none text-xs text-muted hover:text-text">
+            Where the {usd(breakdown.totalUsd)} goes, and why it picked this
+          </summary>
+
+          <div className="mt-3 space-y-3">
+            <div className="overflow-hidden rounded-lg border border-line">
+              <table className="w-full text-sm">
+                <tbody>
+                  {breakdown.lineItems.map((li) => (
+                    <tr key={li.label} className="border-b border-line/70">
+                      <td className="px-3 py-2 text-text">
+                        {li.label}
+                        <div className="text-xs text-muted">{li.basis}</div>
+                      </td>
+                      <td className="px-3 py-2 text-right align-top font-mono text-text">
+                        {usd(li.amountUsd)}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="bg-panel-2">
+                    <td className="px-3 py-2.5 font-semibold text-text">Total</td>
+                    <td className="px-3 py-2.5 text-right font-mono font-semibold text-warn">
+                      {usd(breakdown.totalUsd)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-muted">
+              These figures are worked out by the system, not written by the AI.
+            </p>
+
+            {payload.justification && (
+              <blockquote className="border-l-2 border-line pl-3 text-sm italic leading-relaxed text-muted">
+                {payload.justification}
+              </blockquote>
+            )}
+          </div>
+        </details>
       </div>
     </section>
   );

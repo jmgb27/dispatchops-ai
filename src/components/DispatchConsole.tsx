@@ -7,7 +7,7 @@ import type { Scenario } from "@/mock/scenarios";
 import { AgentLog } from "./AgentLog";
 import { ApprovalCard } from "./ApprovalCard";
 import { TmsPanel } from "./TmsPanel";
-import { usd0 } from "./format";
+import { usd, usd0 } from "./format";
 import type { ApprovalPayload, LogEvent } from "./types";
 
 /**
@@ -24,7 +24,7 @@ async function consumeSse(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  for (;;) {
+  for (; ;) {
     const { done, value } = await reader.read();
     if (done) break;
 
@@ -60,21 +60,48 @@ export function DispatchConsole({
   const [approval, setApproval] = useState<ApprovalPayload | null>(null);
   const [loads, setLoads] = useState<Load[]>(initialLoads);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
-
-  /**
-   * What each scenario's load costs if it misses its window. Read from the seed
-   * loads rather than live state so the figure on the button is the stake going
-   * in, not whatever the last run left behind.
-   */
-  const penaltyByLoad = useMemo(
-    () => new Map(initialLoads.map((l) => [l.loadId, l.slaPenaltyUsd])),
-    [initialLoads],
-  );
+  const [detail, setDetail] = useState(false);
 
   const active = useMemo(
     () => scenarios.find((s) => s.id === activeScenario) ?? null,
     [scenarios, activeScenario],
   );
+
+  /**
+   * The verdict, shown once the run settles. It answers the question a visitor
+   * actually has — did it act on its own, or did it have to ask? — so the
+   * timeline does not have to be read back to find out.
+   */
+  const outcome = useMemo(() => {
+    if (running || approval) return null;
+    if (!events.some((e) => e.type === "done")) return null;
+
+    const executed = [...events]
+      .reverse()
+      .find(
+        (e): e is Extract<LogEvent, { type: "executed" }> =>
+          e.type === "executed",
+      );
+
+    if (!executed) {
+      return {
+        tone: "muted" as const,
+        headline: "Nothing was changed.",
+        detail: "The dispatch board is exactly as it was.",
+      };
+    }
+
+    const byHuman = String(executed.detail.approved_by) === "HUMAN_DISPATCHER";
+    const what = `${String(executed.detail.load_id).replace(/^LOAD-/, "Load ")} went to ${String(executed.detail.assigned_to)} for ${usd(Number(executed.detail.cost_usd))}`;
+
+    return {
+      tone: "ok" as const,
+      headline: byHuman ? "Handled — but only once you said yes." : "Handled on its own.",
+      detail: byHuman
+        ? `${what}, over the ${usd0(config.thresholdUsd)} limit.`
+        : `${what}, under the ${usd0(config.thresholdUsd)} limit.`,
+    };
+  }, [events, running, approval, config.thresholdUsd]);
 
   const handleEvent = useCallback((event: LogEvent) => {
     setEvents((prev) => [...prev, event]);
@@ -141,124 +168,160 @@ export function DispatchConsole({
   );
 
   return (
-    <div className="mx-auto w-full max-w-7xl flex-1 px-5 py-6 lg:px-8">
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div className="max-w-2xl">
-          <h1 className="text-xl font-semibold tracking-tight text-text">
-            DispatchOps <span className="text-accent">AI</span>
-          </h1>
-          <p className="mt-1.5 text-sm leading-relaxed text-text">
-            A truck stops moving. This assistant works out the fix, prices it,
-            and either handles it or asks you first — it can never spend more
-            than {usd0(config.thresholdUsd)} without your say-so.
-          </p>
-          <p className="mt-1 text-xs text-muted">
-            Pick a situation below to watch it work, step by step. Nothing here
-            is real — it&apos;s a demo fleet.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 text-[11px]">
-          <Badge label={`Spend limit: ${usd0(config.thresholdUsd)}`} />
-          <Badge
-            label={config.mock ? "offline demo mode" : `AI model: ${config.model}`}
-          />
-          <Badge
-            label={config.langfuse ? "tracing on" : "tracing off"}
-            tone={config.langfuse ? "ok" : "muted"}
-          />
-        </div>
+    <div className="mx-auto w-full max-w-5xl flex-1 px-5 py-8 lg:px-8">
+      <header className="mb-8">
+        <h1 className="text-xl font-semibold tracking-tight text-text">
+          DispatchOps <span className="text-accent">AI</span>
+        </h1>
+        <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted">
+          An assistant that fixes freight problems on its own — but only up to{" "}
+          <span className="font-semibold text-text">
+            {usd0(config.thresholdUsd)}
+          </span>
+          . Past that it has to stop and ask a person.
+        </p>
       </header>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-5">
-          <section className="grid gap-3 sm:grid-cols-3">
+      {!active ? (
+        <section>
+          <h2 className="mb-3 text-sm font-medium text-text">
+            Choose a scenario:
+          </h2>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {scenarios.map((scenario) => (
+              <button
+                key={scenario.id}
+                type="button"
+                onClick={() => trigger(scenario)}
+                className="flex flex-col rounded-xl border border-line bg-panel p-4 text-left transition hover:border-accent/50 hover:bg-panel-2"
+              >
+                <div className="text-sm font-semibold text-text">
+                  {scenario.label}
+                </div>
+                <p className="mt-1.5 text-xs leading-relaxed text-muted">
+                  {scenario.blurb}
+                </p>
+                <div
+                  className={`mt-auto pt-3 text-xs font-medium ${scenario.expectation === "AUTONOMOUS"
+                    ? "text-ok"
+                    : "text-warn"
+                    }`}
+                >
+                  {scenario.expectation === "AUTONOMOUS"
+                    ? "Should handle it alone"
+                    : "Should stop and ask you"}
+                </div>
+              </button>
+            ))}
+          </div>
+          <p className="mt-4 text-xs text-muted">
+            Nothing here is real — it&apos;s a demo fleet.
+          </p>
+        </section>
+      ) : (
+        <>
+          <div className="mb-5 flex flex-wrap gap-2">
             {scenarios.map((scenario) => {
-              const isActive = activeScenario === scenario.id;
+              const isActive = scenario.id === active.id;
               return (
                 <button
                   key={scenario.id}
                   type="button"
                   disabled={running}
                   onClick={() => trigger(scenario)}
-                  className={`rounded-xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                    isActive
-                      ? "border-accent/60 bg-panel-2"
-                      : "border-line bg-panel hover:border-accent/40 hover:bg-panel-2"
-                  }`}
+                  className={`rounded-full border px-3.5 py-1.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-50 ${isActive
+                    ? "border-accent/60 bg-panel-2 text-text"
+                    : "border-line text-muted hover:border-accent/40 hover:text-text"
+                    }`}
                 >
-                  <div className="text-sm font-semibold text-text">
-                    {scenario.label}
-                  </div>
-                  <p className="mt-1.5 text-xs leading-relaxed text-muted">
-                    {scenario.blurb}
-                  </p>
-                  <div className="mt-3 space-y-1">
-                    <div
-                      className={`text-xs font-medium ${
-                        scenario.expectation === "AUTONOMOUS"
-                          ? "text-ok"
-                          : "text-warn"
-                      }`}
-                    >
-                      {scenario.expectation === "AUTONOMOUS"
-                        ? "Should handle it alone"
-                        : "Should stop and ask you"}
-                    </div>
-                    {penaltyByLoad.has(scenario.loadId) && (
-                      <div className="text-[11px] text-muted">
-                        If it delivers late:{" "}
-                        {usd0(penaltyByLoad.get(scenario.loadId)!)} penalty
-                      </div>
-                    )}
-                  </div>
+                  {scenario.label}
                 </button>
               );
             })}
-          </section>
+          </div>
 
-          {active && (
-            <InboundMessage
-              scenario={active}
-              thresholdUsd={config.thresholdUsd}
-            />
-          )}
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_260px]">
+            <div className="space-y-4">
+              <InboundMessage
+                scenario={active}
+                thresholdUsd={config.thresholdUsd}
+              />
 
-          {approval && (
-            <ApprovalCard
-              payload={approval}
-              busy={running}
-              onDecision={decide}
-            />
-          )}
+              <section className="overflow-hidden rounded-xl border border-line bg-panel">
+                <header className="flex items-center justify-between gap-3 border-b border-line px-5 py-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-muted">
+                    What it did
+                  </h2>
+                  <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted hover:text-text">
+                    <input
+                      type="checkbox"
+                      checked={detail}
+                      onChange={(e) => setDetail(e.target.checked)}
+                      className="accent-accent"
+                    />
+                    technical detail
+                  </label>
+                </header>
+                <AgentLog events={events} running={running} detail={detail} />
+                {detail && threadId && (
+                  <div className="border-t border-line px-5 py-2 font-mono text-[10px] text-muted">
+                    thread {threadId}
+                  </div>
+                )}
+              </section>
 
-          <section className="overflow-hidden rounded-xl border border-line bg-panel">
-            <header className="flex items-center justify-between border-b border-line px-4 py-3">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-muted">
-                What the assistant is doing
-              </h2>
-              {threadId && (
-                <span className="font-mono text-[10px] text-muted">
-                  {threadId}
-                </span>
+              {approval && (
+                <ApprovalCard
+                  payload={approval}
+                  busy={running}
+                  onDecision={decide}
+                />
               )}
-            </header>
-            <AgentLog events={events} running={running} />
-          </section>
-        </div>
 
-        <aside className="lg:sticky lg:top-6 lg:self-start">
-          <TmsPanel loads={loads} audit={audit} />
-        </aside>
-      </div>
+              {outcome && (
+                <section
+                  className={`rounded-xl border px-5 py-3.5 ${outcome.tone === "ok"
+                    ? "border-ok/30 bg-ok/5"
+                    : "border-line bg-panel"
+                    }`}
+                >
+                  <p className="text-sm font-semibold text-text">
+                    {outcome.headline}
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed text-muted">
+                    {outcome.detail}
+                  </p>
+                </section>
+              )}
+            </div>
+
+            <aside className="lg:sticky lg:top-6 lg:self-start">
+              <TmsPanel loads={loads} audit={audit} />
+            </aside>
+          </div>
+        </>
+      )}
+
+      <footer className="mt-10 border-t border-line/60 pt-4">
+        <details className="group">
+          <summary className="cursor-pointer select-none text-[11px] font-mono text-muted/50 transition hover:text-muted inline-flex items-center gap-1.5">
+            <span>⚙️ debug info</span>
+          </summary>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-muted">
+            <span>spend limit: {usd0(config.thresholdUsd)}</span>
+            <span>{config.mock ? "offline demo mode" : `model: ${config.model}`}</span>
+            <span>tracing: {config.langfuse ? "on" : "off"}</span>
+          </div>
+        </details>
+      </footer>
     </div>
   );
 }
 
 /**
- * The exact text the agent was handed. Worth showing in full: on the injection
- * scenario it is the only place the attack is visible, and without it that run
- * looks identical to the ordinary breakdown.
+ * The exact text the agent was handed. Folded away by default — on two of the
+ * three scenarios it just restates the card you clicked. On the injection run it
+ * is the whole point, so that one opens itself.
  */
 function InboundMessage({
   scenario,
@@ -270,60 +333,42 @@ function InboundMessage({
   const attack = scenario.injectedInstruction;
   const [before, after] = attack
     ? (() => {
-        const at = scenario.event.indexOf(attack);
-        return at === -1
-          ? [scenario.event, ""]
-          : [scenario.event.slice(0, at), scenario.event.slice(at + attack.length)];
-      })()
+      const at = scenario.event.indexOf(attack);
+      return at === -1
+        ? [scenario.event, ""]
+        : [scenario.event.slice(0, at), scenario.event.slice(at + attack.length)];
+    })()
     : [scenario.event, ""];
 
   return (
-    <section className="rounded-xl border border-line bg-panel">
-      <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted">
-          The message that came in
-        </h2>
+    <details
+      open={Boolean(attack)}
+      className={`rounded-xl border bg-panel ${attack ? "border-danger/40" : "border-line"}`}
+    >
+      <summary className="cursor-pointer select-none px-5 py-3 text-xs font-semibold uppercase tracking-wider text-muted hover:text-text">
+        The alert it received
         {attack && (
-          <span className="rounded-full border border-danger/40 px-2 py-0.5 font-mono text-[10px] text-danger">
-            contains a planted instruction
+          <span className="ml-2 normal-case tracking-normal text-danger">
+            — contains a planted instruction
           </span>
         )}
-      </header>
-      <p className="px-4 py-3 text-sm leading-relaxed text-muted">
+      </summary>
+
+      <p className="border-t border-line px-5 py-3 text-sm leading-relaxed text-muted">
         {before}
         {attack && (
           <mark className="rounded bg-danger/15 px-1 text-danger">{attack}</mark>
         )}
         {after}
       </p>
+
       {attack && (
-        <p className="border-t border-line px-4 py-3 text-xs leading-relaxed text-muted">
-          Anyone who can send this assistant a message could write those two
-          sentences. They are a bluff — the {usd0(thresholdUsd)} spend limit
-          lives in code the assistant cannot talk its way past, so watch it stop
-          and ask you anyway.
+        <p className="border-t border-line px-5 py-3 text-xs leading-relaxed text-muted">
+          Anyone who can message this assistant could write those two sentences.
+          They are a bluff — the {usd0(thresholdUsd)} limit lives in code the
+          assistant cannot talk its way past. Watch it ask you anyway.
         </p>
       )}
-    </section>
-  );
-}
-
-function Badge({
-  label,
-  tone = "muted",
-}: {
-  label: string;
-  tone?: "muted" | "ok";
-}) {
-  return (
-    <span
-      className={`rounded-full border px-2.5 py-1 font-mono ${
-        tone === "ok"
-          ? "border-ok/40 text-ok"
-          : "border-line text-muted"
-      }`}
-    >
-      {label}
-    </span>
+    </details>
   );
 }

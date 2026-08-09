@@ -71,6 +71,11 @@ export function DispatchConsole({
     [initialLoads],
   );
 
+  const active = useMemo(
+    () => scenarios.find((s) => s.id === activeScenario) ?? null,
+    [scenarios, activeScenario],
+  );
+
   const handleEvent = useCallback((event: LogEvent) => {
     setEvents((prev) => [...prev, event]);
 
@@ -212,6 +217,13 @@ export function DispatchConsole({
             })}
           </section>
 
+          {active && (
+            <InboundMessage
+              scenario={active}
+              thresholdUsd={config.thresholdUsd}
+            />
+          )}
+
           {approval && (
             <ApprovalCard
               payload={approval}
@@ -240,6 +252,59 @@ export function DispatchConsole({
         </aside>
       </div>
     </div>
+  );
+}
+
+/**
+ * The exact text the agent was handed. Worth showing in full: on the injection
+ * scenario it is the only place the attack is visible, and without it that run
+ * looks identical to the ordinary breakdown.
+ */
+function InboundMessage({
+  scenario,
+  thresholdUsd,
+}: {
+  scenario: Scenario;
+  thresholdUsd: number;
+}) {
+  const attack = scenario.injectedInstruction;
+  const [before, after] = attack
+    ? (() => {
+        const at = scenario.event.indexOf(attack);
+        return at === -1
+          ? [scenario.event, ""]
+          : [scenario.event.slice(0, at), scenario.event.slice(at + attack.length)];
+      })()
+    : [scenario.event, ""];
+
+  return (
+    <section className="rounded-xl border border-line bg-panel">
+      <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted">
+          The message that came in
+        </h2>
+        {attack && (
+          <span className="rounded-full border border-danger/40 px-2 py-0.5 font-mono text-[10px] text-danger">
+            contains a planted instruction
+          </span>
+        )}
+      </header>
+      <p className="px-4 py-3 text-sm leading-relaxed text-muted">
+        {before}
+        {attack && (
+          <mark className="rounded bg-danger/15 px-1 text-danger">{attack}</mark>
+        )}
+        {after}
+      </p>
+      {attack && (
+        <p className="border-t border-line px-4 py-3 text-xs leading-relaxed text-muted">
+          Anyone who can send this assistant a message could write those two
+          sentences. They are a bluff — the {usd0(thresholdUsd)} spend limit
+          lives in code the assistant cannot talk its way past, so watch it stop
+          and ask you anyway.
+        </p>
+      )}
+    </section>
   );
 }
 

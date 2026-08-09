@@ -2,10 +2,8 @@
 
 import { useEffect, useRef } from "react";
 
+import { usd } from "./format";
 import type { LogEvent } from "./types";
-
-const usd = (n: number) =>
-  n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
 function Row({
   tag,
@@ -60,8 +58,7 @@ export function AgentLog({
   if (events.length === 0) {
     return (
       <div className="flex h-full min-h-64 items-center justify-center px-6 text-center text-sm text-muted">
-        Trigger a scenario to watch the agent reason, call tools, and hit the
-        cost guardrail.
+        Pick a situation above to watch it work, step by step.
       </div>
     );
   }

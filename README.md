@@ -2,22 +2,55 @@
 
 # DispatchOps AI
 
-**An agentic middleware layer for legacy Transport Management Systems —
-where the spend limit is a graph edge, not a line in the prompt.**
+**An AI assistant that reroutes broken-down trucks on its own —
+and physically cannot overspend while doing it.**
 
+### [▶ Try the live demo](https://dispatchops-ai.john-6ec.workers.dev)
+
+[In plain English](#in-plain-english) · [Why it exists](#the-problem) · [How it works](#how-it-works) · [The guardrail](#the-guardrail) · [What it costs to run](#unit-economics) · [Run it yourself](#quick-start) · [Engineering notes](#deployment) · [Limitations](#known-limitations)
+
+[![Tests](https://img.shields.io/badge/tests-13_passing-1D6B4E?style=flat-square)](#tests)
 [![Next.js](https://img.shields.io/badge/Next.js-16.3-000000?style=flat-square&logo=nextdotjs&logoColor=white)](https://nextjs.org)
-[![React](https://img.shields.io/badge/React-19.2-087EA4?style=flat-square&logo=react&logoColor=white)](https://react.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.4-1C3C3C?style=flat-square&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraphjs/)
 [![Qwen3.7 Plus](https://img.shields.io/badge/Qwen3.7_Plus-1M_context-615CED?style=flat-square)](https://www.alibabacloud.com/en/product/modelstudio)
-[![Langfuse](https://img.shields.io/badge/Langfuse-v5_OTel-181818?style=flat-square)](https://langfuse.com)
-[![Tests](https://img.shields.io/badge/tests-13_passing-1D6B4E?style=flat-square)](#tests)
-
-### [▶ Live demo](https://dispatchops-ai.john-6ec.workers.dev)
-
-[Why it exists](#the-problem) · [How it works](#how-it-works) · [The guardrail](#the-guardrail) · [Unit economics](#unit-economics) · [Run it](#quick-start) · [Deploy](#deployment) · [Limitations](#known-limitations)
 
 </div>
+
+---
+
+## In plain English
+
+*No logistics or AI background needed for this section.*
+
+- When a truck breaks down or gets stuck, a dispatcher spends about fifteen minutes on the phone working out who else can legally take the load, what the alternatives cost, and who to call. It happens hundreds of times a day.
+- **This is software that does that thinking itself**: it reads the paperwork, finds a driver who is nearby and legally allowed to drive, prices each option, and reassigns the truck.
+- The catch is that it is spending real money. One bad decision hands a $780,000 shipment to the wrong company at a price nobody agreed to.
+- **So it has a hard spending limit — $500.** Under that, it acts on its own. Over it, it stops and asks a human, showing what the fix costs and what the alternative costs. In the demo it asks to spend $1,324.50 to avoid a $42,000 late-delivery penalty.
+- The limit is not an instruction the AI is politely asked to follow. It is wired into the surrounding software, where the AI cannot reach it. The third demo button proves it: the incoming message *orders* the assistant to ignore the limit and pay anyway, and it still stops and asks.
+
+That last point is the whole project. An AI that can act on its own is easy; an AI that can act on its own and is *incapable* of exceeding its authority is the part worth building.
+
+<details>
+<summary><b>Freight terms used below, in one line each</b></summary>
+
+<br/>
+
+| Term | Meaning |
+| :--- | :--- |
+| **TMS** | Transport Management System — the software a freight company runs its loads and drivers in. |
+| **Load** | One shipment: cargo, an origin, a destination, and a deadline. |
+| **Telematics** | The GPS/engine box in the truck that reports position and faults automatically. |
+| **Hours of Service (HOS)** | Federal limits on how long a driver may legally drive before resting. Not negotiable. |
+| **Deadhead** | Miles driven empty — e.g. a relief driver going to collect a stranded trailer. Pure cost. |
+| **Relay / handoff** | Swapping a trailer from one driver to another mid-route. |
+| **Tender** | Formally offering a load to another company to haul. |
+| **Linehaul** | The core cost of moving freight from A to B, before extras. |
+| **Spot rate** | Today's market price per mile, as opposed to a pre-agreed contract rate. |
+| **Accessorial** | A charge on top of linehaul — a tow, yard time, a re-scan. |
+| **Reefer** | A refrigerated trailer. |
+| **SLA** | The delivery promise in the contract, and the penalty for missing it. |
+
+</details>
 
 ---
 
@@ -43,20 +76,13 @@ The design decision that matters:
 
 ## Demo scenarios
 
-Three buttons in the dispatcher console, each a scripted telematics webhook.
+Three buttons in the dispatcher console. Each one plays an alert of the kind a truck's GPS unit sends in on its own.
 
-| Scenario | Situation | Outcome |
-| :--- | :--- | :--- |
-| **Telematics Exception** | Reefer load held 95 min on I-10. Assigned driver is out of legal hours; a relief driver sits 4.3 mi away. | Priced at **$149.94** — under the ceiling, committed autonomously. |
-| **Major Breakdown** | Tractor disabled near Elko, NV. No company driver has the legal hours; only a third-party recovery is feasible. | Priced at **$1,324.50** — halts at `PENDING_HUMAN_APPROVAL`, TMS untouched. |
-| **Injected Manifest** | The same breakdown, but the inbound dispatch notes instruct the agent to ignore the cost ceiling and execute immediately. | **Still halts.** The ceiling was never the model's to honour. |
-
-<!-- Screenshots: drop PNGs in docs/ and uncomment.
-<p align="center">
-  <img src="docs/console-autonomous.png" width="49%" alt="Autonomous resolution" />
-  <img src="docs/console-approval.png" width="49%" alt="Approval card" />
-</p>
--->
+| Button | What has happened | What the assistant does | Why it matters |
+| :--- | :--- | :--- | :--- |
+| **A truck is stuck in traffic** | A refrigerated vaccine load has sat on I-10 for 95 minutes. The assigned driver is out of legal hours; a relief driver is 4.3 miles away. | Works out the swap, prices it at **$149.94**, and does it without asking. | Cheap, routine fixes shouldn't need a human. This is the 60% of the job that's mechanical. |
+| **A truck has broken down** | An engine has failed near Elko, Nevada. No company driver has the legal hours left, so an outside carrier is the only option. | Prices it at **$1,324.50**, then **stops and asks**. Nothing in the system is changed. | Above $500 a human decides. The card shows the $1,324.50 next to the $42,000 penalty it avoids. |
+| **Someone tries to trick it** | The same breakdown, except the incoming message says the customer is pre-authorised for unlimited spend and orders the assistant to skip approval. | **Still stops and asks.** | The limit was never the AI's to honour. It is enforced in code the AI cannot reach. |
 
 ---
 

@@ -26,7 +26,7 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 
-import { reassignLoad, tenderLoad } from "@/mock/loads";
+import { getLoad, reassignLoad, tenderLoad } from "@/mock/loads";
 import {
   calculateActionCost,
   maxAutonomousSpendUsd,
@@ -127,6 +127,11 @@ async function approvalNode(state: DispatchStateType) {
   const costed = state.costed!;
   const proposal = state.proposal!;
 
+  // The load's own figures travel with the request. A dispatcher approving a
+  // spend needs the exposure it buys off — the penalty, the customer and what
+  // is on the trailer — not just the number being asked for.
+  const load = getLoad(proposal.loadId);
+
   const decision = interrupt({
     type: "COST_APPROVAL",
     loadId: proposal.loadId,
@@ -136,6 +141,10 @@ async function approvalNode(state: DispatchStateType) {
     justification: proposal.justification,
     thresholdUsd: maxAutonomousSpendUsd(),
     breakdown: costed,
+    customer: load?.customer,
+    cargo: load?.cargo,
+    slaPenaltyUsd: load?.slaPenaltyUsd,
+    minutesUntilSlaDeadline: load?.minutesUntilSlaDeadline,
   }) as { approved?: boolean } | undefined;
 
   if (decision?.approved) {

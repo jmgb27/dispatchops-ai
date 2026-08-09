@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import type { Load, AuditEntry } from "@/mock/loads";
 import type { Scenario } from "@/mock/scenarios";
 import { AgentLog } from "./AgentLog";
 import { ApprovalCard } from "./ApprovalCard";
 import { TmsPanel } from "./TmsPanel";
+import { usd0 } from "./format";
 import type { ApprovalPayload, LogEvent } from "./types";
 
 /**
@@ -59,6 +60,16 @@ export function DispatchConsole({
   const [approval, setApproval] = useState<ApprovalPayload | null>(null);
   const [loads, setLoads] = useState<Load[]>(initialLoads);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
+
+  /**
+   * What each scenario's load costs if it misses its window. Read from the seed
+   * loads rather than live state so the figure on the button is the stake going
+   * in, not whatever the last run left behind.
+   */
+  const penaltyByLoad = useMemo(
+    () => new Map(initialLoads.map((l) => [l.loadId, l.slaPenaltyUsd])),
+    [initialLoads],
+  );
 
   const handleEvent = useCallback((event: LogEvent) => {
     setEvents((prev) => [...prev, event]);
@@ -127,20 +138,28 @@ export function DispatchConsole({
   return (
     <div className="mx-auto w-full max-w-7xl flex-1 px-5 py-6 lg:px-8">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
+        <div className="max-w-2xl">
           <h1 className="text-xl font-semibold tracking-tight text-text">
             DispatchOps <span className="text-accent">AI</span>
           </h1>
-          <p className="mt-1 text-sm text-muted">
-            Agentic TMS exception resolution with a hard cost ceiling.
+          <p className="mt-1.5 text-sm leading-relaxed text-text">
+            A truck stops moving. This assistant works out the fix, prices it,
+            and either handles it or asks you first — it can never spend more
+            than {usd0(config.thresholdUsd)} without your say-so.
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            Pick a situation below to watch it work, step by step. Nothing here
+            is real — it&apos;s a demo fleet.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
-          <Badge label={config.mock ? "scripted offline agent" : config.model} />
-          <Badge label={`ceiling $${config.thresholdUsd}`} />
+          <Badge label={`Spend limit: ${usd0(config.thresholdUsd)}`} />
           <Badge
-            label={config.langfuse ? "langfuse on" : "langfuse off"}
+            label={config.mock ? "offline demo mode" : `AI model: ${config.model}`}
+          />
+          <Badge
+            label={config.langfuse ? "tracing on" : "tracing off"}
             tone={config.langfuse ? "ok" : "muted"}
           />
         </div>
@@ -169,17 +188,24 @@ export function DispatchConsole({
                   <p className="mt-1.5 text-xs leading-relaxed text-muted">
                     {scenario.blurb}
                   </p>
-                  <div
-                    className={`mt-3 font-mono text-[10px] uppercase tracking-wider ${
-                      scenario.expectation === "AUTONOMOUS"
-                        ? "text-ok"
-                        : "text-warn"
-                    }`}
-                  >
-                    expects{" "}
-                    {scenario.expectation === "AUTONOMOUS"
-                      ? "autonomous"
-                      : "human approval"}
+                  <div className="mt-3 space-y-1">
+                    <div
+                      className={`text-xs font-medium ${
+                        scenario.expectation === "AUTONOMOUS"
+                          ? "text-ok"
+                          : "text-warn"
+                      }`}
+                    >
+                      {scenario.expectation === "AUTONOMOUS"
+                        ? "Should handle it alone"
+                        : "Should stop and ask you"}
+                    </div>
+                    {penaltyByLoad.has(scenario.loadId) && (
+                      <div className="text-[11px] text-muted">
+                        If it delivers late:{" "}
+                        {usd0(penaltyByLoad.get(scenario.loadId)!)} penalty
+                      </div>
+                    )}
                   </div>
                 </button>
               );
@@ -197,7 +223,7 @@ export function DispatchConsole({
           <section className="overflow-hidden rounded-xl border border-line bg-panel">
             <header className="flex items-center justify-between border-b border-line px-4 py-3">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-muted">
-                Agent trace
+                What the assistant is doing
               </h2>
               {threadId && (
                 <span className="font-mono text-[10px] text-muted">

@@ -2,8 +2,7 @@
 
 import type { AuditEntry, Load } from "@/mock/loads";
 
-const usd = (n: number) =>
-  n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+import { usd } from "./format";
 
 const STATUS_TONE: Record<string, string> = {
   IN_TRANSIT: "text-muted",

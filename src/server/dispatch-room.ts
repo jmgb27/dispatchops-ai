@@ -38,8 +38,33 @@ import {
 import { getScenario } from "@/mock/scenarios";
 
 /** Storage keys. */
-const CHECKPOINTS_KEY = "checkpoints:v1";
+const LEGACY_CHECKPOINTS_KEY = "checkpoints:v1";
+const INDEX_KEY = "threads:v2";
+const THREAD_PREFIX = "thread:v2:";
 const TMS_KEY = "tms:v1";
+
+/**
+ * Durable Object storage caps a single value at 128 KiB, and one resolved run
+ * checkpoints to roughly 57 KiB. v1 wrote every thread the object had ever seen
+ * into ONE value, so the third run pushed it past the limit and `put` threw —
+ * silently, because the caller swallowed persistence errors to avoid truncating
+ * a response that had already streamed.
+ *
+ * The failure was invisible in the obvious test. The in-memory checkpointer was
+ * still correct, so an approval clicked straight away worked; only once the
+ * object went idle and rehydrated from a blob frozen at run two did the pending
+ * interrupt vanish. Approve then landed on a thread the checkpointer had never
+ * seen — the exact silent no-op the resume guard in `src/agent/stream.ts` now
+ * refuses to report as success.
+ *
+ * So checkpoints are stored per thread, one value each, with an explicit index
+ * for ordering. Retention is bounded because unbounded growth is what broke it.
+ */
+const MAX_RETAINED_THREADS = 8;
+
+function threadKey(threadId: string): string {
+  return `${THREAD_PREFIX}${threadId}`;
+}
 
 /**
  * `MemorySaver`'s `storage` and `writes` are plain nested records of Uint8Array
@@ -49,6 +74,12 @@ const TMS_KEY = "tms:v1";
  * semantics stay exactly the semantics the framework ships.
  */
 type CheckpointSnapshot = Pick<MemorySaver, "storage" | "writes">;
+
+/** One thread's slice of the checkpointer — what a single storage value holds. */
+interface ThreadSlice {
+  storage: CheckpointSnapshot["storage"][string];
+  writes: CheckpointSnapshot["writes"][string];
+}
 
 class PersistentMemorySaver extends MemorySaver {
   constructor(private readonly markDirty: () => void) {
@@ -101,27 +132,73 @@ export class DispatchRoom extends DurableObject {
     // Hydrate before any request is served. `blockConcurrencyWhile` is what
     // guarantees a cold start cannot answer a resume with an empty checkpointer.
     ctx.blockConcurrencyWhile(async () => {
-      const [checkpoints, tms] = await Promise.all([
-        ctx.storage.get<CheckpointSnapshot>(CHECKPOINTS_KEY),
+      const [index, tms] = await Promise.all([
+        ctx.storage.get<string[]>(INDEX_KEY),
         ctx.storage.get<TmsSnapshot>(TMS_KEY),
       ]);
 
-      if (checkpoints) this.saver.hydrate(checkpoints);
+      if (index?.length) {
+        const slices = await Promise.all(
+          index.map((id) => ctx.storage.get<ThreadSlice>(threadKey(id))),
+        );
+
+        const storage: CheckpointSnapshot["storage"] = {};
+        const writes: CheckpointSnapshot["writes"] = {};
+        index.forEach((id, i) => {
+          const slice = slices[i];
+          if (!slice) return;
+          storage[id] = slice.storage;
+          writes[id] = slice.writes;
+        });
+        this.saver.hydrate({ storage, writes });
+      }
+
       if (tms) restoreTms(tms);
+
+      // The v1 blob is dead weight — too large to have been written correctly
+      // since the third run, and never read again.
+      await ctx.storage.delete(LEGACY_CHECKPOINTS_KEY);
     });
   }
 
   /**
    * Writes both pieces of state back. Called once a run has finished streaming
    * — mid-run persistence would capture a half-applied world.
+   *
+   * Only the thread that just ran is written. Rewriting every retained thread on
+   * every run is how the single-value version grew until it hit the size cap.
    */
-  private async persist(): Promise<void> {
+  private async persist(threadId: string): Promise<void> {
+    const writeTms = this.ctx.storage.put(TMS_KEY, snapshotTms());
+
+    if (!this.dirty) {
+      await writeTms;
+      return;
+    }
+
+    const { storage, writes } = this.saver.snapshot();
+    const index = (await this.ctx.storage.get<string[]>(INDEX_KEY)) ?? [];
+    const ordered = [...index.filter((id) => id !== threadId), threadId];
+    const dropped = ordered.slice(0, Math.max(0, ordered.length - MAX_RETAINED_THREADS));
+    const retained = ordered.slice(-MAX_RETAINED_THREADS);
+
     await Promise.all([
-      this.dirty
-        ? this.ctx.storage.put(CHECKPOINTS_KEY, this.saver.snapshot())
-        : Promise.resolve(),
-      this.ctx.storage.put(TMS_KEY, snapshotTms()),
+      writeTms,
+      this.ctx.storage.put(threadKey(threadId), {
+        storage: storage[threadId] ?? {},
+        writes: writes[threadId] ?? {},
+      } satisfies ThreadSlice),
+      this.ctx.storage.put(INDEX_KEY, retained),
+      ...dropped.map((id) => this.ctx.storage.delete(threadKey(id))),
     ]);
+
+    // Drop pruned threads from memory too, or a long-lived instance keeps every
+    // run it has ever served and the snapshot grows without bound again.
+    for (const id of dropped) {
+      delete storage[id];
+      delete writes[id];
+    }
+
     this.dirty = false;
   }
 
@@ -148,17 +225,19 @@ export class DispatchRoom extends DurableObject {
     // Each demo run starts from a clean TMS so the dashboard is reproducible.
     resetTms();
 
+    const threadId = `run-${scenario.id}-${crypto.randomUUID()}`;
+
     return streamDispatchRun({
       input: {
         messages: [new HumanMessage(scenario.event)],
         loadId: scenario.loadId,
       },
-      threadId: `run-${scenario.id}-${crypto.randomUUID()}`,
+      threadId,
       scenarioId: scenario.id,
       loadId: scenario.loadId,
       emitRunStarted: true,
       graph: this.graph,
-      onFinished: () => this.persist(),
+      onFinished: () => this.persist(threadId),
       waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
   }
@@ -186,7 +265,7 @@ export class DispatchRoom extends DurableObject {
       loadId: scenario?.loadId ?? "",
       emitRunStarted: false,
       graph: this.graph,
-      onFinished: () => this.persist(),
+      onFinished: () => this.persist(threadId),
       waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
   }

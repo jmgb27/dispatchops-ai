@@ -196,8 +196,12 @@ export function streamDispatchRun(opts: {
         finished = true;
         try {
           await opts.onFinished?.();
-        } catch {
-          // Persistence failure must not truncate a response already streamed.
+        } catch (err) {
+          // Persistence failure must not truncate a response already streamed —
+          // but it must not be silent either. Swallowing this is what hid a
+          // storage-limit error for as long as it took someone to click Approve
+          // and be told, wrongly, that nothing had changed.
+          console.error("[dispatch] persisting run state failed", err);
         }
       };
 

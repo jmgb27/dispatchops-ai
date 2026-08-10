@@ -484,19 +484,37 @@ Workers offers **no isolate affinity**. The request that calls `interrupt()` and
 - **The graph runs inside the object.** That makes the object's memory the TMS's memory, so the dispatcher board shows one consistent world rather than whatever the answering isolate happened to remember.
 - **Durability rides on LangGraph's own checkpointer.** `MemorySaver` exposes `storage` and `writes` as plain records of `Uint8Array`, which Durable Object storage serialises natively. A thin write-through subclass persists them and `blockConcurrencyWhile` rehydrates on cold start, so interrupt/resume semantics stay exactly the ones the framework ships rather than a hand-rolled reimplementation.
 
-Verified on `workerd`: a run interrupted at $1,324.50, the runtime killed outright, and the same thread resumed in a **fresh process** — committing as `HUMAN_DISPATCHER` from state rehydrated off disk.
+Verified on the deployed Worker: four consecutive runs, a 60-second idle so the object is evicted and rehydrates from storage, then the fourth thread resumed and committed as `HUMAN_DISPATCHER`.
 
-#### A resume that lands nowhere
+> That verification is deliberately more paranoid than it first was. The original check — interrupt, kill the runtime, resume — passed while the persistence layer was quietly broken, because it only ever ran one thread. Four runs and an idle period is what actually exercises it. See [the write-up below](#the-approval-that-silently-did-nothing).
 
-Found by clicking Reject on the deployed demo and watching nothing happen.
+#### The approval that silently did nothing
 
-If the thread is no longer in the checkpointer — redeployed Worker, evicted Durable Object, or a console left open across either — then `Command({ resume })` has nothing to continue. LangGraph does not error. The stream yields no updates and the run ends `done` with nothing executed, which the console rendered as *"Nothing was changed"* — the identical wording it used for a genuine rejection.
+The most instructive bug in the project, so it is written up in full.
 
-So a dispatcher clicking **Approve** on an aged-out thread was told their decision had landed when it had not. Silent, and confidently wrong, which for a financial control is the worst of the available failure modes.
+**Symptom.** Clicking Reject on the deployed demo did nothing visible. The timeline still read *"Stopped and waiting for you"* and the verdict said *"Nothing was changed"* — which is also exactly what a successful rejection looked like.
 
-The fix is a guard in [`src/agent/stream.ts`](src/agent/stream.ts): before resuming, ask the graph whether that thread actually has work pending, and if it does not, say so plainly instead of streaming a successful-looking no-op. The console now distinguishes three outcomes that used to collapse into one — *you turned it down*, *nothing happened*, and *your decision was not applied*.
+**First finding.** If the thread is not in the checkpointer, `Command({ resume })` has nothing to continue and **LangGraph does not error**. The stream yields no updates and the run ends `done` with nothing executed. So a dispatcher clicking **Approve** on such a thread was told their decision had landed when it had not — silent, and confidently wrong, which for a financial control is the worst failure mode available.
 
-The related UI bug the same click exposed: the timeline kept saying **"Stopped and waiting for you"** after the dispatcher had answered, and never recorded the answer. A decision the operator cannot see in the audit trail is not much of an audit trail.
+That earned a guard in [`src/agent/stream.ts`](src/agent/stream.ts): before resuming, ask the graph whether the thread actually has work pending, and refuse to stream a successful-looking no-op if it does not. The console now separates three outcomes it used to collapse into one — *you turned it down*, *nothing happened*, and *your decision was not applied*.
+
+**But the guard kept firing on valid runs**, which meant it was reporting a real defect rather than an edge case.
+
+**Root cause.** Approvals worked when clicked immediately and failed after roughly ten seconds. That gap is a Durable Object going idle and rehydrating from storage — so the persisted copy was wrong, while memory was right.
+
+Durable Object storage caps a single value at **128 KiB**. One resolved run checkpoints to about **57 KiB**, and `persist()` wrote *every thread the object had ever served* into one value. From the **third run onward**, `put` threw. And the throw was swallowed:
+
+```ts
+try { await opts.onFinished?.(); } catch { /* must not truncate the response */ }
+```
+
+The intent was reasonable — a persistence failure should not truncate a response already streamed. The effect was that the storage limit was hit silently, every subsequent run, for as long as the demo had been up.
+
+**Why nothing caught it.** The in-memory checkpointer stayed correct, so every fast path passed: the tests pass, `wrangler dev` passes, and clicking Approve straight after a run works. It only fails when the object goes idle first, on the third-or-later run. The README previously claimed this path was verified on `workerd` — it was, with an immediate resume on a fresh instance, which is precisely the case that works.
+
+**Fix.** One value per thread behind an explicit index, retention bounded to 8 threads, the stale blob deleted on hydrate, and persistence failures logged rather than swallowed. Verified on the deployed Worker: four consecutive runs — past the point the old layout broke — then a 60-second idle, then Approve, committing as `HUMAN_DISPATCHER` from rehydrated state.
+
+**What it is worth writing down.** The guard did not fix this bug; it *surfaced* it. The original design failed by staying quiet, and the quiet is what made it survive. For a system whose entire claim is that a human decides above a threshold, "the human decided and the system lost it" is the failure that matters most — and it presented as nothing at all.
 
 #### Two things that only break in production
 

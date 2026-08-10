@@ -34,8 +34,13 @@
   // QWEN_API_KEY and QWEN_BASE_URL are set with `wrangler secret put`, not here.
   // A dedicated Model Studio workspace host identifies the workspace, so it does
   // not belong in a committed file.
+  // All three spend ceilings are stated here rather than left to their code
+  // defaults. What the agent is allowed to spend unsupervised should be legible
+  // in the deployment config, not only in the source that reads it.
   "vars": {
     "MAX_AUTONOMOUS_SPEND_USD": "500",
+    "MAX_LOAD_SPEND_USD": "2000",
+    "MAX_DAILY_SPEND_USD": "5000",
     "MOCK_AGENT": "0",
     "QWEN_MODEL": "qwen3.7-plus"
   }

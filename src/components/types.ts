@@ -36,6 +36,7 @@ export type LogEvent =
       /** The ceiling that decided the outcome — not always the per-action one. */
       thresholdUsd: number;
       escalationReason?: EscalationReason | null;
+      refusal?: { code: string; reason: string } | null;
       costed: CostedProposal | null;
     }
   | { type: "approval_required"; payload: ApprovalPayload }

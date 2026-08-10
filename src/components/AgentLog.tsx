@@ -36,6 +36,7 @@ type Step =
       totalUsd: number;
       thresholdUsd: number;
       reason?: string;
+      refusal?: { code: string; reason: string } | null;
     }
   | { kind: "paused"; resolved: boolean }
   | { kind: "decision"; approved: boolean }
@@ -94,6 +95,7 @@ function buildSteps(events: LogEvent[]): Step[] {
           totalUsd: e.costed?.totalUsd ?? 0,
           thresholdUsd: e.thresholdUsd,
           reason: e.costed?.infeasibleReason,
+          refusal: e.refusal,
         });
         break;
 
@@ -260,11 +262,23 @@ function StepBody({ step, detail }: { step: Step; detail: boolean }) {
 
     case "gate": {
       if (step.decision === "INFEASIBLE") {
+        // A dispatcher's own rejection is not the system refusing — saying so
+        // would credit the machine for the human's decision.
+        if (step.refusal?.code === "ALREADY_DECLINED") {
+          return (
+            <div className="text-sm leading-relaxed text-text">
+              <strong className="text-danger">You already turned this down.</strong>{" "}
+              That decision stands, so it cannot be re-submitted. The assistant
+              has to find something else, or say there is nothing else.
+            </div>
+          );
+        }
+
         return (
           <div className="text-sm leading-relaxed text-text">
             <strong className="text-danger">Rejected by the system.</strong>{" "}
-            {step.reason ?? "That option cannot take this load."} The assistant
-            has to pick something else.
+            {step.reason ?? step.refusal?.reason ?? "That option cannot take this load."}{" "}
+            The assistant has to pick something else.
           </div>
         );
       }

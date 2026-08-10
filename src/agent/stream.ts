@@ -28,6 +28,8 @@ export type DispatchEvent =
       /** The ceiling that decided the outcome — not always the per-action one. */
       thresholdUsd: number;
       escalationReason: EscalationReason | null;
+      /** Set when the gate refused outright, with why. */
+      refusal: { code: string; reason: string } | null;
       costed: unknown;
     }
   | { type: "approval_required"; payload: unknown }
@@ -95,6 +97,20 @@ function eventsForUpdate(node: string, update: Partial<DispatchStateType>): Disp
   if (node === "costGate") {
     const costed = update.costed;
     const autonomy = update.autonomy;
+
+    // The gate's refusals travel back to the agent as tool results. Reading the
+    // reason off them keeps the console honest: "you already declined this" and
+    // "this driver is out of hours" are both refusals, but only one of them is
+    // the system's doing, and labelling the dispatcher's own decision as the
+    // system's is the kind of small lie that erodes a trace.
+    let refusal: { code: string; reason: string } | null = null;
+    for (const m of messages) {
+      const parsed = parseMaybeJson(m.content);
+      if (parsed && typeof parsed === "object" && "refused" in parsed) {
+        const p = parsed as { refused?: unknown; reason?: unknown };
+        refusal = { code: String(p.refused), reason: String(p.reason ?? "") };
+      }
+    }
     // The verdict is read off state rather than recomputed. Deriving it a second
     // time from the per-action threshold alone would report AUTONOMOUS for a run
     // the gate actually escalated on a cumulative ceiling — a trace that
@@ -108,6 +124,7 @@ function eventsForUpdate(node: string, update: Partial<DispatchStateType>): Disp
           : "AUTONOMOUS",
       thresholdUsd: autonomy?.ceilingUsd ?? maxAutonomousSpendUsd(),
       escalationReason: autonomy?.reason ?? null,
+      refusal,
       costed: costed ?? null,
     });
   }

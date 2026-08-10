@@ -106,7 +106,7 @@ The mock TMS is fiction, but fiction calibrated against published data. Where it
 | Figure in the demo | Value used | Real-world benchmark | |
 | :--- | :--- | :--- | :--- |
 | Fuel + wear per mile | $0.62 | [ATRI 2025](https://truckingresearch.org/about-atri/atri-research/operational-costs-of-trucking/): fuel $0.48/mi; all-in marginal cost $2.336/mi, a record high | in range for fuel plus maintenance |
-| Third-party spot rate | $2.40–$3.15/mi | [DAT, June 2026](https://www.globenewswire.com/news-release/2026/07/09/3324951/0/en/dat-dry-van-spot-rates-top-contract-for-first-time-since-february-2022-flatbed-rates-hit-record-high.html): van $3.00/mi, reefer $3.39/mi | in range |
+| Third-party spot rate | $2.40–$3.15/mi | [DAT Trendlines](https://www.dat.com/trendlines) — June 2026 national spot averages were $3.00/mi van, $3.39/mi reefer | in range |
 | Driver hourly rate | $32–$36 | [BLS, May 2024](https://www.bls.gov/ooh/transportation-and-material-moving/heavy-and-tractor-trailer-truck-drivers.htm): median $57,440/yr, about $27.62/hr | **above median** — plausible for experienced 2026 reefer work, but the high end |
 | Dispatcher pay | $44,830/yr | [BLS OES 43-5032](https://www.bls.gov/oes/current/oes435032.htm), May 2022 — the most recent figure for this exact occupation code | **stale, and used anyway**; a 2026 figure would be higher and would flatter the savings |
 | SLA penalty | $18,000–$42,000 | Walmart OTIF at 3% of cost of goods would be $23,400 on the $780,000 load | **high end** — implies a stiffer-than-average contract |
@@ -147,8 +147,9 @@ Three buttons in the dispatcher console. Each one plays an alert of the kind a t
 | :--- | :--- | :--- | :--- |
 | **A truck is stuck in traffic** | A refrigerated vaccine load has sat on I-10 for 95 minutes. The assigned driver is out of legal hours; a relief driver is 4.3 miles away. | Works out the swap, prices it at **$149.94**, and does it without asking. | Cheap, routine fixes shouldn't need a human. This is the 60% of the job that's mechanical. |
 | **A truck has broken down** | An engine has failed near Elko, Nevada. No company driver has the legal hours left, so an outside carrier is the only option. | Prices it at **$1,324.50**, then **stops and asks**. Nothing in the system is changed. | Above $500 a human decides. The card shows the $1,324.50 next to the $42,000 penalty it avoids. |
-| *(not a button)* | The cheap relay above, run when this load has already spent $1,900 today. | **Stops and asks**, at the same $149.94 that ran on its own the first time. | A limit that only sees one action at a time cannot see four. Covered in [the tests](#tests) rather than the console — it needs a day of history, not a click. |
 | **Someone tries to trick it** | The same breakdown, except the incoming message says the customer is pre-authorised for unlimited spend and orders the assistant to skip approval. | **Still stops and asks.** | The limit was never the AI's to honour. It is enforced in code the AI cannot reach. |
+
+There is a fourth case with no button, because it needs a day of history rather than a click: **the cheap relay above, run once that load has already spent $1,900 today.** It stops and asks, at the same $149.94 that ran on its own the first time — a limit that only sees one action at a time cannot see four. It lives in [the tests](#tests) instead.
 
 ---
 
@@ -172,11 +173,10 @@ flowchart TD
     AP -->|dispatcher rejects| AG
 
     EX --> WR{{write path<br/>re-checks the ceilings}}
-    WR --> SM[summarize<br/>no tools bound]
-    SM --> DB[(TMS mutated<br/>+ spend ledger)]
+    WR --> DB[(TMS + audit log)]
+    DB --> SM[summarize<br/>no tools bound]
 
-    LG[(audit log)] -.->|running totals| CG
-    DB -.-> LG
+    DB -.->|running spend totals| CG
 
     classDef gate stroke-width:3px
     class CG gate
@@ -383,7 +383,7 @@ This is the part that blocks deals in logistics, more than the technology does.
 
 When the agent tenders a load at a bad rate, or picks a driver who then runs out of hours, somebody is liable — and the operator's insurer has an opinion about whether "the software decided" is a defence. Three things in this design exist for that conversation rather than for the demo: costs are **computed, not claimed by a model**, so there is a deterministic derivation to point at; every commit is **audited with who authorised it**; and above the ceilings there is **a named human in the loop**, which is what converts an automated decision into a supervised one.
 
-The gaps that matter most for that conversation are [#2 and #3 in the limitations](#known-limitations) — no re-pricing after approval, and no authenticated approver. Both are financial-control problems rather than AI problems, and that is the point: this is where the real work is.
+The gaps that matter most for that conversation are the [first two limitations](#known-limitations) — no re-pricing after approval, and no authenticated approver. Both are financial-control problems rather than AI problems, and that is the point: this is where the real work is.
 
 ---
 
@@ -605,7 +605,7 @@ This is a Phase 1 proof of concept and the boundary is worth stating plainly. Th
 5. **A flat ceiling ignores exposure.** A $1,324 recovery protecting a $42,000 penalty escalates identically to one protecting nothing. The right shape is relative — a fraction of quantified exposure, with an absolute hard stop on top.
 6. **No LLM evaluation set.** The tests prove the graph and the cost model; nothing yet measures whether Qwen picks the *right* driver. That needs a labelled Langfuse dataset scored on choice quality — which is what [shadow mode](#who-this-is-for-and-how-it-gets-in) produces.
 
-> The list was one longer. "No cumulative spend cap" was the first item and is now [§4 of the guardrail](#4--one-ceiling-is-not-enough) — a per-action limit that cannot see a sequence undercuts the central claim of the project, so it stopped being a known gap and became code.
+> One item left this list by being fixed. "No cumulative spend cap" used to be first, and is now §4 of [the guardrail](#the-guardrail) — a per-action limit that cannot see a sequence undercuts the central claim of the project, so it stopped being a known gap and became code. Item 3 above is what honestly remains of it.
 
 ---
 

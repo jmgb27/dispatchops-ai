@@ -51,7 +51,14 @@ export function DispatchConsole({
 }: {
   scenarios: Scenario[];
   initialLoads: Load[];
-  config: { model: string; thresholdUsd: number; langfuse: boolean; mock: boolean };
+  config: {
+    model: string;
+    thresholdUsd: number;
+    loadCeilingUsd: number;
+    dailyCeilingUsd: number;
+    langfuse: boolean;
+    mock: boolean;
+  };
 }) {
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [running, setRunning] = useState(false);
@@ -338,7 +345,9 @@ export function DispatchConsole({
             <span>⚙️ debug info</span>
           </summary>
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-muted">
-            <span>spend limit: {usd0(config.thresholdUsd)}</span>
+            <span>limit per decision: {usd0(config.thresholdUsd)}</span>
+            <span>per load: {usd0(config.loadCeilingUsd)}</span>
+            <span>per day: {usd0(config.dailyCeilingUsd)}</span>
             <span>{config.mock ? "offline demo mode" : `model: ${config.model}`}</span>
             <span>tracing: {config.langfuse ? "on" : "off"}</span>
           </div>

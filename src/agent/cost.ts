@@ -46,13 +46,20 @@ function round2(n: number): number {
 }
 
 /**
- * The autonomy ceiling. Read at call time rather than module load so tests can
- * vary it and so a redeploy picks up a changed env without a rebuild.
+ * The ceilings themselves live in `src/spend-policy.ts` — a leaf module the TMS
+ * write path can also import without a cycle, so the same rule is enforced both
+ * at the graph's gate and at the commit. Re-exported here because pricing and
+ * the threshold are read together everywhere they are read at all.
  */
-export function maxAutonomousSpendUsd(): number {
-  const raw = Number(process.env.MAX_AUTONOMOUS_SPEND_USD);
-  return Number.isFinite(raw) && raw > 0 ? raw : 500;
-}
+export {
+  evaluateAutonomy,
+  maxAutonomousSpendUsd,
+  maxDailySpendUsd,
+  maxLoadSpendUsd,
+  requiresHumanApproval,
+  type AutonomyDecision,
+  type SpendLedger,
+} from "@/spend-policy";
 
 /**
  * Prices handing `loadId` to `resourceId`, which may be a company driver or a
@@ -181,7 +188,3 @@ export function calculateActionCost(
   };
 }
 
-/** The guardrail decision itself. Structural, not prompted. */
-export function requiresHumanApproval(totalUsd: number): boolean {
-  return totalUsd >= maxAutonomousSpendUsd();
-}

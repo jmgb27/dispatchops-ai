@@ -26,11 +26,12 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 
-import { getLoad, reassignLoad, tenderLoad } from "@/mock/loads";
+import { getLoad, reassignLoad, spendLedger, tenderLoad } from "@/mock/loads";
+import { describeEscalation } from "@/spend-policy";
 import {
   calculateActionCost,
+  evaluateAutonomy,
   maxAutonomousSpendUsd,
-  requiresHumanApproval,
 } from "./cost";
 import { SYSTEM_PROMPT, buildBoundModel, buildModel } from "./model";
 import { buildMockBoundModel, buildMockSummaryModel } from "./mockModel";
@@ -63,7 +64,7 @@ async function costGateNode(state: DispatchStateType) {
   const call = last.tool_calls?.find((tc) => tc.name === EXECUTE_REROUTE_NAME);
 
   if (!call?.id) {
-    return { costed: null, proposal: null };
+    return { costed: null, proposal: null, autonomy: null };
   }
 
   const args = call.args as {
@@ -86,6 +87,7 @@ async function costGateNode(state: DispatchStateType) {
     return {
       proposal,
       costed: null,
+      autonomy: null,
       messages: [
         new ToolMessage({
           tool_call_id: call.id,
@@ -105,6 +107,7 @@ async function costGateNode(state: DispatchStateType) {
     return {
       proposal,
       costed,
+      autonomy: null,
       messages: [
         new ToolMessage({
           tool_call_id: call.id,
@@ -120,7 +123,15 @@ async function costGateNode(state: DispatchStateType) {
     };
   }
 
-  return { proposal, costed };
+  // Priced and feasible. The remaining question is authority, and it is not
+  // answerable from this action alone — a $450 reroute is within the per-action
+  // ceiling and still out of bounds if it is the fourth one today.
+  const autonomy = evaluateAutonomy(
+    costed.totalUsd,
+    spendLedger(proposal.loadId),
+  );
+
+  return { proposal, costed, autonomy };
 }
 
 async function approvalNode(state: DispatchStateType) {
@@ -140,6 +151,13 @@ async function approvalNode(state: DispatchStateType) {
     resourceKind: costed.resourceKind,
     justification: proposal.justification,
     thresholdUsd: maxAutonomousSpendUsd(),
+    // Which ceiling stopped it, and the running total behind that answer. A
+    // dispatcher seeing a $420 request needs to know it is the fourth today,
+    // or the card is asking them to approve something that looks routine.
+    autonomy: state.autonomy ?? undefined,
+    escalationReason: state.autonomy
+      ? describeEscalation(state.autonomy)
+      : undefined,
     breakdown: costed,
     customer: load?.customer,
     cargo: load?.cargo,
@@ -235,7 +253,10 @@ function routeFromAgent(state: DispatchStateType) {
 function routeFromCostGate(state: DispatchStateType) {
   const costed = state.costed;
   if (!costed || costed.infeasibleReason) return "agent";
-  return requiresHumanApproval(costed.totalUsd) ? "approval" : "execute";
+  // Fail closed: a feasible proposal always carries a verdict, and a missing one
+  // means something upstream is wrong. Ask a human rather than assume authority.
+  if (!state.autonomy) return "approval";
+  return state.autonomy.requiresApproval ? "approval" : "execute";
 }
 
 function routeFromApproval(state: DispatchStateType) {

@@ -36,10 +36,12 @@ type Step =
       thresholdUsd: number;
       reason?: string;
     }
-  | { kind: "paused" }
+  | { kind: "paused"; resolved: boolean }
+  | { kind: "decision"; approved: boolean }
   | { kind: "executed"; detail: Record<string, unknown> }
   | { kind: "summary"; text: string }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+  | { kind: "resumeFailed"; message: string };
 
 /**
  * Folds the raw event stream into a short human narrative.
@@ -94,7 +96,26 @@ function buildSteps(events: LogEvent[]): Step[] {
         break;
 
       case "approval_required":
-        steps.push({ kind: "paused" });
+        steps.push({ kind: "paused", resolved: false });
+        break;
+
+      case "decision": {
+        // The pause it answers is no longer pending, so stop describing it in
+        // the present tense — a timeline that still says "waiting for you"
+        // after you have answered reads as though the click did nothing.
+        for (let i = steps.length - 1; i >= 0; i--) {
+          const step = steps[i];
+          if (step.kind === "paused") {
+            step.resolved = true;
+            break;
+          }
+        }
+        steps.push({ kind: "decision", approved: e.approved });
+        break;
+      }
+
+      case "resume_failed":
+        steps.push({ kind: "resumeFailed", message: e.message });
         break;
 
       case "executed":
@@ -126,11 +147,14 @@ function dotClass(step: Step): string {
     case "gate":
       return step.decision === "AUTONOMOUS" ? "bg-ok" : "bg-warn";
     case "paused":
-      return "bg-warn";
+      return step.resolved ? "bg-line" : "bg-warn";
+    case "decision":
+      return step.approved ? "bg-ok" : "bg-danger";
     case "executed":
     case "summary":
       return "bg-ok";
     case "error":
+    case "resumeFailed":
       return "bg-danger";
   }
 }
@@ -262,10 +286,39 @@ function StepBody({ step, detail }: { step: Step; detail: boolean }) {
     }
 
     case "paused":
-      return (
+      return step.resolved ? (
+        <p className="text-sm leading-relaxed text-muted">
+          Stopped and asked you. Nothing had been changed at this point.
+        </p>
+      ) : (
         <p className="text-sm leading-relaxed text-warn">
           Stopped and waiting for you. Nothing has been changed yet.
         </p>
+      );
+
+    case "decision":
+      return step.approved ? (
+        <p className="text-sm leading-relaxed text-text">
+          <strong className="text-ok">You approved it.</strong> Going ahead.
+        </p>
+      ) : (
+        <p className="text-sm leading-relaxed text-text">
+          <strong className="text-danger">You turned it down.</strong> Nothing
+          was changed. The assistant has to look for something cheaper, or
+          explain that there isn&apos;t one.
+        </p>
+      );
+
+    case "resumeFailed":
+      return (
+        <div className="rounded-lg border border-danger/40 bg-danger/5 px-3 py-2.5">
+          <p className="text-sm font-semibold text-danger">
+            Your decision was not applied.
+          </p>
+          <p className="mt-1 text-sm leading-relaxed text-muted">
+            {step.message}
+          </p>
+        </div>
       );
 
     case "executed": {

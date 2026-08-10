@@ -1,4 +1,5 @@
 import type { CostedProposal } from "@/agent/cost";
+import type { AutonomyDecision, EscalationReason } from "@/spend-policy";
 import type { Load, AuditEntry } from "@/mock/loads";
 
 export interface ApprovalPayload {
@@ -10,6 +11,9 @@ export interface ApprovalPayload {
   justification: string;
   thresholdUsd: number;
   breakdown: CostedProposal;
+  /** Which ceiling escalated this, and the running totals behind it. */
+  autonomy?: AutonomyDecision;
+  escalationReason?: string;
   /**
    * Context from the load record, so the card can show what the spend buys off
    * rather than only what it costs. Optional because the payload crosses the
@@ -29,10 +33,14 @@ export type LogEvent =
   | {
       type: "cost_gate";
       decision: "AUTONOMOUS" | "APPROVAL_REQUIRED" | "INFEASIBLE";
+      /** The ceiling that decided the outcome — not always the per-action one. */
       thresholdUsd: number;
+      escalationReason?: EscalationReason | null;
       costed: CostedProposal | null;
     }
   | { type: "approval_required"; payload: ApprovalPayload }
+  | { type: "decision"; approved: boolean }
+  | { type: "resume_failed"; message: string }
   | { type: "executed"; detail: Record<string, unknown> }
   | { type: "summary"; text: string }
   | { type: "tms_snapshot"; loads: Load[]; audit: AuditEntry[] }

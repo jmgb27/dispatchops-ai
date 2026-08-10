@@ -84,6 +84,34 @@ export function DispatchConsole({
       );
 
     if (!executed) {
+      // Three different reasons the board is untouched, and they are not the
+      // same news. Collapsing them into one "nothing was changed" is what made
+      // a lost decision look like a normal rejection.
+      if (events.some((e) => e.type === "resume_failed")) {
+        return {
+          tone: "bad" as const,
+          headline: "Your decision was not applied.",
+          detail:
+            "This run had already finished waiting. Nothing was changed — run the scenario again.",
+        };
+      }
+
+      const rejected = [...events]
+        .reverse()
+        .find(
+          (e): e is Extract<LogEvent, { type: "decision" }> =>
+            e.type === "decision",
+        );
+
+      if (rejected && !rejected.approved) {
+        return {
+          tone: "muted" as const,
+          headline: "You turned it down.",
+          detail:
+            "Nothing was changed. The load is still assigned exactly as it was, and the delivery window is still at risk — that is now yours to resolve.",
+        };
+      }
+
       return {
         tone: "muted" as const,
         headline: "Nothing was changed.",
@@ -282,7 +310,9 @@ export function DispatchConsole({
                 <section
                   className={`rounded-xl border px-5 py-3.5 ${outcome.tone === "ok"
                     ? "border-ok/30 bg-ok/5"
-                    : "border-line bg-panel"
+                    : outcome.tone === "bad"
+                      ? "border-danger/40 bg-danger/5"
+                      : "border-line bg-panel"
                     }`}
                 >
                   <p className="text-sm font-semibold text-text">

@@ -6,6 +6,12 @@
  * graph's execute node, never directly from the model. See src/agent/graph.ts.
  */
 
+import {
+  describeEscalation,
+  evaluateAutonomy,
+  type AutonomyDecision,
+  type SpendLedger,
+} from "@/spend-policy";
 import type { GeoPoint } from "./fleet";
 
 export type LoadStatus =
@@ -138,6 +144,57 @@ export function getAuditLog(): AuditEntry[] {
   return structuredClone(auditLog);
 }
 
+/**
+ * What has already been committed, read straight off the audit log.
+ *
+ * The ledger is derived rather than stored on purpose. A separate running total
+ * is a second source of truth that can drift from the entries it summarises —
+ * and for a spend control, drifting low is a silent hole.
+ */
+export function spendLedger(loadId: string): SpendLedger {
+  let loadUsd = 0;
+  let dailyUsd = 0;
+  for (const entry of auditLog) {
+    dailyUsd += entry.costUsd;
+    if (entry.loadId === loadId) loadUsd += entry.costUsd;
+  }
+  return {
+    loadUsd: Math.round(loadUsd * 100) / 100,
+    dailyUsd: Math.round(dailyUsd * 100) / 100,
+  };
+}
+
+/** Thrown when an autonomous commit would breach a spend ceiling. */
+export class SpendCapExceededError extends Error {
+  constructor(readonly decision: AutonomyDecision) {
+    super(`Refused: ${describeEscalation(decision)}`);
+    this.name = "SpendCapExceededError";
+  }
+}
+
+/**
+ * The backstop. The graph's cost gate decides the *route*; this decides whether
+ * the write actually lands, so a commit cannot get past a ceiling even if the
+ * routing is wrong. Read-check-write happens here in one synchronous step,
+ * against the same log the commit appends to, so two runs cannot both pass a
+ * check and then both commit.
+ *
+ * A human-approved action is exempt by design. The ceilings bound what the
+ * agent may spend *unsupervised*; approval is the audited way past them, and
+ * an approved recovery is expected to sit above the line — that is the whole
+ * reason a dispatcher was asked.
+ */
+function assertCommitAllowed(
+  loadId: string,
+  costUsd: number,
+  approvedBy: AuditEntry["approvedBy"],
+): void {
+  if (approvedBy === "HUMAN_DISPATCHER") return;
+
+  const decision = evaluateAutonomy(costUsd, spendLedger(loadId));
+  if (decision.requiresApproval) throw new SpendCapExceededError(decision);
+}
+
 /** Write path: hand the load to a different company driver. */
 export function reassignLoad(
   loadId: string,
@@ -147,6 +204,7 @@ export function reassignLoad(
 ): Load {
   const load = loads.find((l) => l.loadId === loadId);
   if (!load) throw new Error(`Unknown load ${loadId}`);
+  assertCommitAllowed(loadId, costUsd, approvedBy);
 
   load.assignedDriverId = driverId;
   load.status = "REASSIGNED";
@@ -169,6 +227,7 @@ export function tenderLoad(
 ): Load {
   const load = loads.find((l) => l.loadId === loadId);
   if (!load) throw new Error(`Unknown load ${loadId}`);
+  assertCommitAllowed(loadId, costUsd, approvedBy);
 
   load.assignedDriverId = carrierId;
   load.status = "TENDERED_TO_CARRIER";

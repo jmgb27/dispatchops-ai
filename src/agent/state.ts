@@ -1,6 +1,7 @@
 import { Annotation, messagesStateReducer } from "@langchain/langgraph";
 import type { BaseMessage } from "@langchain/core/messages";
 
+import type { AutonomyDecision } from "@/spend-policy";
 import type { CostedProposal } from "./cost";
 
 export type RunStatus =
@@ -35,6 +36,15 @@ export const DispatchState = Annotation.Root({
   }),
   /** What the deterministic cost model said it would cost. */
   costed: Annotation<CostedProposal | null>({
+    reducer: (_prev, next) => next,
+    default: () => null,
+  }),
+  /**
+   * The guardrail verdict on the priced proposal — every ceiling, not just the
+   * per-action one. Written by the cost gate and read by its routing function,
+   * so the branch is a lookup rather than a second evaluation of the policy.
+   */
+  autonomy: Annotation<AutonomyDecision | null>({
     reducer: (_prev, next) => next,
     default: () => null,
   }),

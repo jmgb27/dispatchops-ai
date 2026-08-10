@@ -8,6 +8,7 @@ import type { AIMessage, ToolMessage } from "@langchain/core/messages";
 import type { Command } from "@langchain/langgraph";
 
 import { getAuditLog, listLoads } from "@/mock/loads";
+import { maxAutonomousSpendUsd, type EscalationReason } from "@/spend-policy";
 import { dispatchGraph, type DispatchGraph } from "./graph";
 import {
   flushTraces,
@@ -24,10 +25,16 @@ export type DispatchEvent =
   | {
       type: "cost_gate";
       decision: "AUTONOMOUS" | "APPROVAL_REQUIRED" | "INFEASIBLE";
+      /** The ceiling that decided the outcome — not always the per-action one. */
       thresholdUsd: number;
+      escalationReason: EscalationReason | null;
       costed: unknown;
     }
   | { type: "approval_required"; payload: unknown }
+  /** A dispatcher's decision, once the graph has actually taken it up. */
+  | { type: "decision"; approved: boolean }
+  /** The resume could not be applied — see the stale-thread guard below. */
+  | { type: "resume_failed"; message: string }
   | { type: "executed"; detail: unknown }
   | { type: "summary"; text: string }
   | { type: "tms_snapshot"; loads: unknown; audit: unknown }
@@ -85,26 +92,32 @@ function eventsForUpdate(node: string, update: Partial<DispatchStateType>): Disp
 
   if (node === "costGate") {
     const costed = update.costed;
-    if (!costed) {
-      events.push({
-        type: "cost_gate",
-        decision: "INFEASIBLE",
-        thresholdUsd: Number(process.env.MAX_AUTONOMOUS_SPEND_USD ?? 500),
-        costed: null,
-      });
-    } else {
-      const threshold = Number(process.env.MAX_AUTONOMOUS_SPEND_USD ?? 500);
-      events.push({
-        type: "cost_gate",
-        decision: costed.infeasibleReason
-          ? "INFEASIBLE"
-          : costed.totalUsd >= threshold
-            ? "APPROVAL_REQUIRED"
-            : "AUTONOMOUS",
-        thresholdUsd: threshold,
-        costed,
-      });
-    }
+    const autonomy = update.autonomy;
+    // The verdict is read off state rather than recomputed. Deriving it a second
+    // time from the per-action threshold alone would report AUTONOMOUS for a run
+    // the gate actually escalated on a cumulative ceiling — a trace that
+    // disagrees with the control flow is worse than no trace.
+    events.push({
+      type: "cost_gate",
+      decision: !costed || costed.infeasibleReason
+        ? "INFEASIBLE"
+        : autonomy?.requiresApproval
+          ? "APPROVAL_REQUIRED"
+          : "AUTONOMOUS",
+      thresholdUsd: autonomy?.ceilingUsd ?? maxAutonomousSpendUsd(),
+      escalationReason: autonomy?.reason ?? null,
+      costed: costed ?? null,
+    });
+  }
+
+  // The approval node produces an update only once a decision has come back —
+  // on the initial pass `interrupt()` unwinds it before it can return anything.
+  // So an update here always means a dispatcher actually decided.
+  if (node === "approval" && update.humanDecision) {
+    events.push({
+      type: "decision",
+      approved: update.humanDecision === "APPROVED",
+    });
   }
 
   if (node === "execute") {
@@ -200,6 +213,39 @@ export function streamDispatchRun(opts: {
 
         let finalStatus = "RUNNING";
         let interrupted = false;
+
+        /**
+         * A resume against a thread the checkpointer does not hold is a silent
+         * no-op: LangGraph has nothing to continue, so the stream yields no
+         * updates and the run ends `done` with nothing executed and no error.
+         *
+         * On screen that is indistinguishable from a rejection — the console
+         * shows "nothing was changed" either way — so a dispatcher who clicks
+         * Approve on a thread that has aged out is told their decision landed
+         * when it did not. For a financial control that is the worst failure
+         * mode available: silent, and confidently wrong.
+         *
+         * The thread can go missing legitimately: a redeployed Worker, an
+         * evicted Durable Object, or a console left open across either.
+         */
+        if (!opts.emitRunStarted) {
+          const snapshot = await graph.getState({
+            configurable: { thread_id: opts.threadId },
+          });
+          if (!snapshot?.next?.length) {
+            send({
+              type: "resume_failed",
+              message:
+                "That decision could not be applied — this run is no longer " +
+                "waiting for one. It most likely expired, or the server " +
+                "restarted. Nothing was changed. Run the scenario again.",
+            });
+            await finish();
+            send({ type: "tms_snapshot", loads: listLoads(), audit: getAuditLog() });
+            send({ type: "done", status: "EXPIRED" });
+            return;
+          }
+        }
 
         const traceName = opts.emitRunStarted
           ? `dispatch:${opts.scenarioId}`

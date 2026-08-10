@@ -65,6 +65,21 @@ export function ApprovalCard({
           . Nothing has been changed yet.
         </p>
 
+        {/*
+         * Why it stopped. A single expensive action explains itself from the
+         * number alone; a cumulative stop does not — $420 looks routine unless
+         * the card says it is the fourth one on this load today.
+         */}
+        {payload.autonomy?.reason &&
+          payload.autonomy.reason !== "PER_ACTION_CEILING" && (
+            <p className="rounded-lg border border-warn/30 bg-warn/5 px-3 py-2 text-xs leading-relaxed text-muted">
+              <span className="font-semibold text-warn">
+                Why you are being asked:
+              </span>{" "}
+              {payload.escalationReason}
+            </p>
+          )}
+
         <div className="flex flex-wrap gap-3">
           <button
             type="button"

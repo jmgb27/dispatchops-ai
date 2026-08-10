@@ -10,6 +10,8 @@ export type RunStatus =
   | "RESOLVED_AUTONOMOUS"
   | "RESOLVED_AFTER_APPROVAL"
   | "REJECTED_BY_HUMAN"
+  /** Out of options it is allowed to take; the load is the dispatcher's now. */
+  | "HANDED_TO_DISPATCHER"
   | "FAILED";
 
 export interface RerouteProposal {
@@ -48,6 +50,24 @@ export const DispatchState = Annotation.Root({
     reducer: (_prev, next) => next,
     default: () => null,
   }),
+  /**
+   * Resources a human has declined on this thread.
+   *
+   * A rejection has to outlive the tool message that reported it. Without this
+   * the refusal is just advice in the transcript, and the agent — correctly,
+   * from its own point of view — re-argues for the only feasible option and
+   * asks again. And again.
+   */
+  declined: Annotation<string[]>({
+    reducer: (prev, next) =>
+      Array.from(new Set([...(prev ?? []), ...(next ?? [])])),
+    default: () => [],
+  }),
+  /** How many times it has re-proposed something already declined. */
+  reproposals: Annotation<number>({
+    reducer: (_prev, next) => next,
+    default: () => 0,
+  }),
   /** Set by the approval node once a dispatcher resolves the interrupt. */
   humanDecision: Annotation<"APPROVED" | "REJECTED" | null>({
     reducer: (_prev, next) => next,
@@ -56,6 +76,11 @@ export const DispatchState = Annotation.Root({
   status: Annotation<RunStatus>({
     reducer: (_prev, next) => next,
     default: () => "RUNNING",
+  }),
+  /** Closing note written by the graph when it stops and hands the load back. */
+  handoverNote: Annotation<string | null>({
+    reducer: (_prev, next) => next,
+    default: () => null,
   }),
 });
 

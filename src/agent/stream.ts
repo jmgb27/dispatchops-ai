@@ -35,6 +35,8 @@ export type DispatchEvent =
   | { type: "decision"; approved: boolean }
   /** The resume could not be applied — see the stale-thread guard below. */
   | { type: "resume_failed"; message: string }
+  /** The graph stopped and gave the load back to the dispatcher. */
+  | { type: "handover"; message: string }
   | { type: "executed"; detail: unknown }
   | { type: "summary"; text: string }
   | { type: "tms_snapshot"; loads: unknown; audit: unknown }
@@ -118,6 +120,10 @@ function eventsForUpdate(node: string, update: Partial<DispatchStateType>): Disp
       type: "decision",
       approved: update.humanDecision === "APPROVED",
     });
+  }
+
+  if (node === "handover" && update.handoverNote) {
+    events.push({ type: "handover", message: update.handoverNote });
   }
 
   if (node === "execute") {

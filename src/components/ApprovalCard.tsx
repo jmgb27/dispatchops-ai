@@ -1,6 +1,7 @@
 "use client";
 
 import { humanMinutes, usd, usd0 } from "./format";
+import { Markdown } from "./Markdown";
 import type { ApprovalPayload } from "./types";
 
 export function ApprovalCard({
@@ -137,8 +138,8 @@ export function ApprovalCard({
             </p>
 
             {payload.justification && (
-              <blockquote className="border-l-2 border-line pl-3 text-sm italic leading-relaxed text-muted">
-                {payload.justification}
+              <blockquote className="border-l-2 border-line pl-3 text-muted">
+                <Markdown>{payload.justification}</Markdown>
               </blockquote>
             )}
           </div>

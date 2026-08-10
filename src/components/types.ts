@@ -41,6 +41,7 @@ export type LogEvent =
   | { type: "approval_required"; payload: ApprovalPayload }
   | { type: "decision"; approved: boolean }
   | { type: "resume_failed"; message: string }
+  | { type: "handover"; message: string }
   | { type: "executed"; detail: Record<string, unknown> }
   | { type: "summary"; text: string }
   | { type: "tms_snapshot"; loads: Load[]; audit: AuditEntry[] }

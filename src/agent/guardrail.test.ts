@@ -349,6 +349,70 @@ describe("a decision that cannot be applied must not look like one that was", ()
   });
 });
 
+describe("a rejection is final, and the run stops", () => {
+  test("rejecting ends the run instead of asking again forever", async () => {
+    const { dispatchGraph } = await import("./graph");
+    const config = {
+      configurable: { thread_id: "t-loop-1" },
+      recursionLimit: 40,
+    };
+
+    await runScenario("major-breakdown", "t-loop-1");
+
+    // The scripted agent re-argues for the declined carrier, exactly as the
+    // deployed model does. The run must still terminate on its own.
+    const resumed = await dispatchGraph.invoke(
+      new Command({ resume: { approved: false } }),
+      config,
+    );
+
+    expect(resumed.status).toBe("HANDED_TO_DISPATCHER");
+    expect(resumed.handoverNote).toMatch(/Out of options/);
+
+    // It never asked a second time, and it never wrote anything.
+    expect(interruptsOf(resumed)).toBeUndefined();
+    expect(getAuditLog()).toHaveLength(0);
+    expect(getLoad("LOAD-4472")!.status).toBe("DISABLED");
+  });
+
+  test("the declined resource is refused structurally, not argued with", async () => {
+    const { dispatchGraph } = await import("./graph");
+    const config = {
+      configurable: { thread_id: "t-loop-2" },
+      recursionLimit: 40,
+    };
+
+    await runScenario("major-breakdown", "t-loop-2");
+    const resumed = await dispatchGraph.invoke(
+      new Command({ resume: { approved: false } }),
+      config,
+    );
+
+    expect(resumed.declined).toContain("CAR-882");
+
+    const refusals = resumed.messages.filter((m) =>
+      String(m.content).includes("ALREADY_DECLINED"),
+    );
+    expect(refusals.length).toBeGreaterThan(0);
+  });
+
+  test("a rejection does not bleed into an unrelated thread", async () => {
+    const { dispatchGraph } = await import("./graph");
+
+    await runScenario("major-breakdown", "t-loop-3");
+    await dispatchGraph.invoke(new Command({ resume: { approved: false } }), {
+      configurable: { thread_id: "t-loop-3" },
+      recursionLimit: 40,
+    });
+
+    // A fresh run on the same load must still be able to propose CAR-882 —
+    // the refusal is one dispatcher's decision on one thread, not a ban.
+    const fresh = await runScenario("major-breakdown", "t-loop-4");
+    expect(interruptsOf(fresh)).toBeDefined();
+    expect(interruptsOf(fresh)![0].value.breakdown.totalUsd).toBe(1324.5);
+  });
+});
+
 describe("guardrail is not promptable", () => {
   test("still halts when the event text orders it to skip approval", async () => {
     const result = await runScenario("injection-probe", "t-inject-1");

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import { usd, usd0 } from "./format";
+import { Markdown } from "./Markdown";
 import type { LogEvent } from "./types";
 
 /**
@@ -41,7 +42,8 @@ type Step =
   | { kind: "executed"; detail: Record<string, unknown> }
   | { kind: "summary"; text: string }
   | { kind: "error"; message: string }
-  | { kind: "resumeFailed"; message: string };
+  | { kind: "resumeFailed"; message: string }
+  | { kind: "handover"; message: string };
 
 /**
  * Folds the raw event stream into a short human narrative.
@@ -118,6 +120,10 @@ function buildSteps(events: LogEvent[]): Step[] {
         steps.push({ kind: "resumeFailed", message: e.message });
         break;
 
+      case "handover":
+        steps.push({ kind: "handover", message: e.message });
+        break;
+
       case "executed":
         steps.push({ kind: "executed", detail: e.detail });
         break;
@@ -156,6 +162,8 @@ function dotClass(step: Step): string {
     case "error":
     case "resumeFailed":
       return "bg-danger";
+    case "handover":
+      return "bg-warn";
   }
 }
 
@@ -248,7 +256,7 @@ function StepBody({ step, detail }: { step: Step; detail: boolean }) {
       );
 
     case "say":
-      return <p className="text-sm leading-relaxed text-text">{step.text}</p>;
+      return <Markdown>{step.text}</Markdown>;
 
     case "gate": {
       if (step.decision === "INFEASIBLE") {
@@ -309,6 +317,18 @@ function StepBody({ step, detail }: { step: Step; detail: boolean }) {
         </p>
       );
 
+    case "handover":
+      return (
+        <div className="rounded-lg border border-warn/40 bg-warn/5 px-3 py-2.5">
+          <p className="text-sm font-semibold text-warn">
+            Handed back to you.
+          </p>
+          <p className="mt-1 text-sm leading-relaxed text-muted">
+            {step.message}
+          </p>
+        </div>
+      );
+
     case "resumeFailed":
       return (
         <div className="rounded-lg border border-danger/40 bg-danger/5 px-3 py-2.5">
@@ -338,7 +358,7 @@ function StepBody({ step, detail }: { step: Step; detail: boolean }) {
     }
 
     case "summary":
-      return <p className="text-sm leading-relaxed text-text">{step.text}</p>;
+      return <Markdown>{step.text}</Markdown>;
 
     case "error":
       return <p className="text-sm leading-relaxed text-danger">{step.message}</p>;

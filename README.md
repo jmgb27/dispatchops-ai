@@ -9,7 +9,7 @@ and physically cannot overspend while doing it.**
 
 [In plain English](#in-plain-english) · [What it's worth](#what-its-worth) · [How it works](#how-it-works) · [The guardrail](#the-guardrail) · [Who buys it](#who-this-is-for-and-how-it-gets-in) · [Run it yourself](#quick-start) · [Engineering notes](#deployment) · [Limitations](#known-limitations)
 
-[![Tests](https://img.shields.io/badge/tests-24_passing-1D6B4E?style=flat-square)](#tests)
+[![Tests](https://img.shields.io/badge/tests-27_passing-1D6B4E?style=flat-square)](#tests)
 [![Next.js](https://img.shields.io/badge/Next.js-16.3-000000?style=flat-square&logo=nextdotjs&logoColor=white)](https://nextjs.org)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.4-1C3C3C?style=flat-square&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraphjs/)
 [![Qwen3.7 Plus](https://img.shields.io/badge/Qwen3.7_Plus-1M_context-615CED?style=flat-square)](https://www.alibabacloud.com/en/product/modelstudio)
@@ -236,7 +236,18 @@ function routeFromCostGate(state: DispatchStateType) {
 }
 ```
 
-Within every ceiling the agent commits on its own. At or above any of them, the graph interrupts and the console renders the agent's justification alongside the itemised derivation and `Approve` / `Reject`. Approve resumes the same thread with `Command({ resume })`; Reject returns the refusal to the agent as a tool result so it looks for something cheaper.
+Within every ceiling the agent commits on its own. At or above any of them, the graph interrupts and the console renders the agent's justification alongside the itemised derivation and `Approve` / `Reject`. Approve resumes the same thread with `Command({ resume })`.
+
+Reject is the interesting half, and it did not work properly at first. Returning the refusal to the agent as a tool result is only *advice* — when the declined option is the only legal one, the agent re-argues for it, gets gated again, is rejected again, and the dispatcher is asked the same question forever. So a rejection is recorded on state and the declined resource is removed from the space:
+
+```ts
+// src/agent/graph.ts — costGateNode
+if (state.declined.includes(proposal.resourceId)) {
+  return { /* refused: "ALREADY_DECLINED" */ };
+}
+```
+
+That is the same shape as the Hours-of-Service refusal: a constraint, not a suggestion. And because a model that is confident cannot be relied on to stop, the graph counts re-proposals and terminates the run itself after the second one, on a `handover` node that writes the closing note in code rather than letting the model improvise *"I give up"*. The scripted offline agent is deliberately modelled as **never yielding**, so the tests prove termination is the graph's guarantee rather than the model's good manners.
 
 ### 4 · One ceiling is not enough
 
@@ -570,7 +581,7 @@ scripts/cf-build.mjs            Cloudflare build wrapper (see Deployment)
 npm test
 ```
 
-Twenty-four tests, run against `MOCK_AGENT=1` so the sequence is deterministic — they assert the behaviour of the graph and the cost model, not the wording of an LLM.
+Twenty-seven tests, run against `MOCK_AGENT=1` so the sequence is deterministic — they assert the behaviour of the graph and the cost model, not the wording of an LLM.
 
 - The cost model prices both demo paths exactly, and every breakdown reconciles to its total.
 - Every threshold is a closed lower bound: 499.99 passes, 500 escalates — and the same at the cumulative scopes.
@@ -581,6 +592,8 @@ Twenty-four tests, run against `MOCK_AGENT=1` so the sequence is deterministic �
 - **A sequence of individually cheap actions escalates before it runs away**, and the same $149.94 relay that ran autonomously above halts once the load has spent enough today — with the per-action ceiling still saying it is fine.
 - **The write path refuses an over-ceiling autonomous commit called directly**, with no gate involved, and writes nothing when it does; a human-approved commit at the same number goes through.
 - The spend ledger is derived from the audit log rather than tracked alongside it.
+- **A rejection is final and the run ends**, against a scripted agent written to never yield: the declined resource is refused structurally, the graph stops it, and the load comes back to the dispatcher with nothing written.
+- A rejection on one thread does not ban that resource on the next run — it is one dispatcher's decision, not a policy.
 - **An approval aimed at a thread that was never interrupted commits nothing**, and a thread with no pending work is detectable *before* resuming — which is what stops a lost decision being reported as a successful one.
 
 ---

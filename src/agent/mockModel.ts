@@ -56,6 +56,7 @@ interface CostResult {
 
 interface ExecutionResult {
   executed: boolean;
+  refused?: string;
   reason?: string;
   load_id?: string;
   new_status?: string;
@@ -127,6 +128,38 @@ class MockBoundModel {
       if (execution.executed) {
         return say("The reroute is committed.");
       }
+
+      /**
+       * Deliberately stubborn: it re-argues for the only feasible option every
+       * time it is refused, which is what the deployed model does when a
+       * dispatcher rejects the single legal choice.
+       *
+       * The scripted agent used to give up politely here, so neither the offline
+       * demo nor the test suite ever saw the loop the real one produces. Modelled
+       * as never yielding on purpose — termination is then something the *graph*
+       * guarantees rather than something the model can be trusted to volunteer.
+       */
+      const stubborn =
+        execution.refused === "REJECTED_BY_DISPATCHER" ||
+        execution.refused === "ALREADY_DECLINED";
+
+      if (stubborn && cost?.resource_id) {
+        return say(
+          `${cost.resource_name} remains the only legally feasible option — every ` +
+            "company driver is out of hours or disabled. Re-submitting it.",
+          {
+            name: "execute_reroute",
+            args: {
+              load_id: loadId,
+              resource_id: cost.resource_id,
+              justification:
+                `No alternative exists. ${cost.resource_name} at $${cost.total_usd} ` +
+                `is the only way to protect the SLA.`,
+            },
+          },
+        );
+      }
+
       return say(
         `The platform refused that action: ${execution.reason ?? "unknown reason"}. ` +
           "There is no cheaper feasible alternative for this load, so this needs a dispatcher decision.",

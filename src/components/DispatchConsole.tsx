@@ -103,6 +103,21 @@ export function DispatchConsole({
         };
       }
 
+      const handover = [...events]
+        .reverse()
+        .find(
+          (e): e is Extract<LogEvent, { type: "handover" }> =>
+            e.type === "handover",
+        );
+
+      if (handover) {
+        return {
+          tone: "muted" as const,
+          headline: "It has run out of options.",
+          detail: handover.message,
+        };
+      }
+
       const rejected = [...events]
         .reverse()
         .find(
